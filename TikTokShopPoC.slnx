@@ -1,0 +1,5 @@
+<Solution>
+  <Project Path="TikTokShop.Domain/TikTokShop.Domain.csproj" />
+  <Project Path="TikTokShop.Service/TikTokShop.Service.csproj" />
+  <Project Path="TikTokShop.WebAPI/TikTokShop.WebAPI.csproj" />
+</Solution>

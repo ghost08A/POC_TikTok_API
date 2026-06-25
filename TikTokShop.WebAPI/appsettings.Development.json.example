@@ -1,0 +1,16 @@
+{
+  "TikTok": {
+    "AppKey": "ดูได้จาก TikTok Partner Center → App Management",
+    "AppSecret": "ดูได้จาก TikTok Partner Center → App Management",
+    "BaseUrl": "https://open-api.tiktokglobalshop.com"
+  },
+
+  "TikTokTenants": {
+    "PoC_MobileShop_01": {
+      "ShopName": "ชื่อร้านค้า",
+      "AccessToken": "ได้จาก OAuth Callback หรือ TikTok Seller Center",
+      "ShopCipher": "ได้จาก GET /authorization/202309/shops → data.shops[].cipher",
+      "ShopId": "ได้จาก GET /authorization/202309/shops → data.shops[].id"
+    }
+  }
+}
