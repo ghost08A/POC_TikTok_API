@@ -8,9 +8,15 @@
   "TikTokTenants": {
     "PoC_MobileShop_01": {
       "ShopName": "ชื่อร้านค้า",
-      "AccessToken": "ได้จาก OAuth Callback หรือ TikTok Seller Center",
-      "ShopCipher": "ได้จาก GET /authorization/202309/shops → data.shops[].cipher",
-      "ShopId": "ได้จาก GET /authorization/202309/shops → data.shops[].id"
+
+      "AccessToken":  "ได้จาก GET /api/auth/callback → config_to_save.AccessToken",
+      "RefreshToken": "ได้จาก GET /api/auth/callback → config_to_save.RefreshToken",
+
+      "AccessTokenExpireAt":  "ได้จาก GET /api/auth/callback → config_to_save.AccessTokenExpireAt  (รูปแบบ: 2026-06-26T10:00:00Z)",
+      "RefreshTokenExpireAt": "ได้จาก GET /api/auth/callback → config_to_save.RefreshTokenExpireAt (รูปแบบ: 2026-12-20T10:00:00Z)",
+
+      "ShopCipher": "ได้จาก GET /api/auth/callback → config_to_save.ShopCipher  (= open_id จาก TikTok)",
+      "ShopId":     "ได้จาก GET /api/shops/{tenantCode} → shops[].id"
     }
   }
 }

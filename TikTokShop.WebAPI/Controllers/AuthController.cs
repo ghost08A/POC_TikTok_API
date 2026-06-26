@@ -1,5 +1,7 @@
 using Microsoft.AspNetCore.Mvc;
 using TikTokShop.Domain.Interfaces;
+using TikTokShop.Domain.Models;
+using TikTokShop.Service.Stores;
 
 namespace TikTokShop.WebAPI.Controllers;
 
@@ -9,42 +11,46 @@ namespace TikTokShop.WebAPI.Controllers;
 // Route Prefix: /api/auth
 //
 // Endpoints:
-//   GET /api/auth/callback  — รับ Authorization Code จาก TikTok OAuth Redirect
-//
-// Flow:
-//   1. Seller คลิก "เชื่อมต่อร้านค้า" → Redirect ไป TikTok Authorization Page
-//   2. Seller กดอนุญาต → TikTok Redirect กลับมาที่ /api/auth/callback?code=xxx
-//   3. Controller รับ code แล้วส่งให้ AuthService แลกเป็น Access Token
-//   4. บันทึก Token ลง DB (TODO) แล้ว Redirect ไป Dashboard
+//   GET  /api/auth/callback          — รับ OAuth Code แลก Token (Initial)
+//   POST /api/auth/refresh/{tenantCode} — ต่ออายุ AccessToken ด้วย RefreshToken
+//   GET  /api/auth/status/{tenantCode}  — ดูสถานะ Token ของ Tenant
 // ================================================================
 [ApiController]
 [Route("api/auth")]
 [Tags("🔐 Authentication")]
 public class AuthController : ControllerBase
 {
-    private readonly IAuthService              _authService;
-    private readonly ILogger<AuthController>   _logger;
+    private readonly IAuthService            _authService;
+    private readonly TenantStore             _tenantStore;
+    private readonly ILogger<AuthController> _logger;
+    private readonly IShopService _shopService;
 
-    public AuthController(IAuthService authService, ILogger<AuthController> logger)
+    public AuthController(
+        IAuthService            authService,
+        TenantStore             tenantStore,
+        ILogger<AuthController> logger,
+        IShopService shopService)
     {
         _authService = authService;
+        _tenantStore = tenantStore;
         _logger      = logger;
+        _shopService = shopService;
     }
 
     // ────────────────────────────────────────────────────────────
     // GET /api/auth/callback?code={authCode}&state={state}
-    // OAuth Redirect URI — TikTok จะ Redirect Seller มาที่นี่หลังอนุญาต
+    // OAuth Redirect URI — TikTok Redirect Seller มาที่นี่หลังอนุญาต
     // ────────────────────────────────────────────────────────────
     /// <summary>
-    /// [OAuth Callback] รับ Authorization Code จาก TikTok หลัง Seller กดอนุญาต
-    /// นำ Code ไปแลกเป็น Access Token + Refresh Token ทันที
+    /// [OAuth Callback] รับ Authorization Code จาก TikTok แล้วแลกเป็น Token
     /// </summary>
     /// <remarks>
-    /// URL นี้ต้องถูกลงทะเบียนเป็น "Redirect URI" ใน TikTok Developer Console
+    /// URL นี้ต้องลงทะเบียนเป็น Redirect URI ใน TikTok Developer Console
     /// <br/>⚠️ Auth Code หมดอายุเร็วมาก ต้องแลกทันทีที่ได้รับ
+    /// <br/><br/>
+    /// หลังได้ Token แล้ว ให้นำค่าเหล่านี้ไปใส่ใน appsettings.Development.json:
+    /// AccessToken, RefreshToken, AccessTokenExpireAt, RefreshTokenExpireAt, ShopCipher (= open_id)
     /// </remarks>
-    /// <param name="code">Authorization Code จาก TikTok (Required)</param>
-    /// <param name="state">State parameter สำหรับ CSRF Protection (Optional)</param>
     [HttpGet("callback")]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
@@ -53,47 +59,69 @@ public class AuthController : ControllerBase
         [FromQuery] string  code,
         [FromQuery] string? state = null)
     {
-        // ── ตรวจสอบว่า TikTok ส่ง Code กลับมาจริงไหม ─────────────
-        // ถ้าไม่มี code แสดงว่า Seller กดยกเลิก หรือ OAuth Error
         if (string.IsNullOrEmpty(code))
         {
-            _logger.LogWarning("[Auth] TikTok ไม่ได้ส่ง Auth Code (Seller อาจกดยกเลิก | State={State})", state);
-            return BadRequest(new { success = false, message = "Authorization failed or user cancelled." });
+            _logger.LogWarning("[Auth] TikTok ไม่ได้ส่ง Auth Code | State={State}", state);
+            return BadRequest(new
+            {
+                success = false,
+                message = "Authorization failed or user cancelled."
+            });
         }
-
-        _logger.LogInformation("[Auth] ได้รับ Auth Code (State={State}) กำลังแลก Token...", state);
 
         try
         {
-            // แลก Code → Access Token (ต้องรวดเร็ว เพราะ Code หมดอายุไวมาก)
+            DateTime timenow = DateTime.UtcNow;
+            // 1. แลก code เป็น token
             var tokenData = await _authService.ExchangeCodeForTokenAsync(code);
 
-            // ════════════════════════════════════════════════════
-            // 💾 TODO: บันทึก Token ลง Database
-            //
-            // Production ควรทำ:
-            //   - _dbContext.Shops.Upsert({ OpenId, AccessToken, RefreshToken, ExpireAt })
-            //   - OpenId (tokenData.OpenId) = ShopCipher ที่ใช้ใน API Request
-            //   - AccessToken หมดอายุทุก ~24h → ต้องมี RefreshToken Flow
-            //   - RefreshToken หมดอายุทุก 180 วัน → ต้องแจ้ง Seller Re-authorize
-            // ════════════════════════════════════════════════════
+            // คำนวณวันเวลาหมดอายุ (UTC)
+            var accessTokenExpireAt = DateTimeOffset
+             .FromUnixTimeSeconds(tokenData.AccessTokenExpireIn)
+             .UtcDateTime;
 
-            _logger.LogInformation("[Auth] ✅ ได้ Token ของ: {SellerName}", tokenData.SellerName);
-            _logger.LogInformation("[Auth] AccessToken หมดอายุใน {Expire} วินาที", tokenData.AccessTokenExpireIn);
-            _logger.LogInformation("[Auth] OpenId (ShopCipher): {OpenId}", tokenData.OpenId);
+            var refreshTokenExpireAt = DateTimeOffset
+                .FromUnixTimeSeconds(tokenData.RefreshTokenExpireIn)
+                .UtcDateTime;
 
-            // PoC: Return Token Data โดยตรง
-            // Production: Redirect ไป Dashboard → return Redirect("https://my-saas.com/dashboard?sync=success");
-            return Ok(new
+
+            var authorizedShops = await _shopService.GetAuthorizedShopsByAccessTokenAsync(
+               tokenData.AccessToken
+            );
+
+            var shop = authorizedShops.Data?.Shops?.FirstOrDefault();
+
+            if (shop == null)
             {
-                success       = true,
-                seller_name   = tokenData.SellerName,
-                open_id       = tokenData.OpenId,
-                token_expires = tokenData.AccessTokenExpireIn,
-                // ⚠️ ไม่ควร Return AccessToken/RefreshToken ตรงๆ ใน Production
-                //    ควรเก็บไว้ใน Server-side เท่านั้น
-                debug_token   = tokenData.AccessToken
-            });
+                return BadRequest(new
+                {
+                    success = false,
+                    message = "ไม่พบร้านค้าที่ authorize กับ TikTok"
+                });
+            }
+
+            // 4. Upsert ลง Database
+            // ตัวอย่าง field ที่ควรเก็บ:
+            var tenant = new ShopTenant
+            {
+                TenantCode = $"TikTok_{shop.Id}",
+                ShopName = shop.Name,
+
+                ShopId = shop.Id,
+                ShopCipher = shop.Cipher,
+
+                AccessToken = tokenData.AccessToken,
+                RefreshToken = tokenData.RefreshToken,
+
+                AccessTokenExpireAt = accessTokenExpireAt,
+                RefreshTokenExpireAt = refreshTokenExpireAt,
+
+                ConnectedAt = timenow,
+                Status = "active"
+            };
+
+
+            return Ok(tenant);
         }
         catch (Exception ex)
         {
@@ -101,5 +129,100 @@ public class AuthController : ControllerBase
             return StatusCode(StatusCodes.Status500InternalServerError,
                 new { success = false, message = "Token exchange failed.", detail = ex.Message });
         }
+    }
+
+    // ────────────────────────────────────────────────────────────
+    // POST /api/auth/refresh/{tenantCode}
+    // ต่ออายุ AccessToken ที่หมดหรือใกล้หมด ด้วย RefreshToken
+    [HttpPost("refresh/{tenantCode}")]
+    public async Task<IActionResult> RefreshToken(string tenantCode)
+    {
+        _logger.LogInformation("🔄 [Auth] Refresh Token ของ Tenant: {TenantCode}", tenantCode);
+
+        try
+        {
+            var tokenData = await _authService.RefreshAccessTokenAsync(tenantCode);
+
+            var now = DateTime.UtcNow;
+
+            var accessTokenExpireAt = DateTimeOffset
+                .FromUnixTimeSeconds(tokenData.AccessTokenExpireIn)
+                .UtcDateTime;
+
+            var refreshTokenExpireAt = DateTimeOffset
+                .FromUnixTimeSeconds(tokenData.RefreshTokenExpireIn)
+                .UtcDateTime;
+
+            return Ok(new
+            {
+                success = true,
+                tenantCode,
+                message = "✅ Refresh Token สำเร็จ — In-Memory Store อัปเดตแล้ว",
+                warning = "⚠️ กรุณาคัดลอก config_to_save ไปอัปเดตใน appsettings.Development.json เพื่อให้ค่าคงอยู่หลัง Restart",
+                config_to_save = new
+                {
+                    AccessToken = tokenData.AccessToken,
+                    RefreshToken = tokenData.RefreshToken,
+                    AccessTokenExpireAt = accessTokenExpireAt.ToString("u"),
+                    RefreshTokenExpireAt = refreshTokenExpireAt.ToString("u"),
+                },
+                token_expires_in_minutes = (int)(accessTokenExpireAt - now).TotalMinutes
+            });
+        }
+        catch (KeyNotFoundException ex)
+        {
+            return NotFound(new { success = false, message = ex.Message });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { success = false, message = ex.Message });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[Auth] Refresh ล้มเหลว | Tenant={TenantCode}", tenantCode);
+            return StatusCode(StatusCodes.Status500InternalServerError,
+                new { success = false, message = ex.Message });
+        }
+    }
+
+    // ────────────────────────────────────────────────────────────
+    // GET /api/auth/status/{tenantCode}
+    // ดูสถานะ Token ของ Tenant โดยไม่ต้องเรียก TikTok API
+    // ────────────────────────────────────────────────────────────
+    /// <summary>
+    /// [Token Status] ดูสถานะและเวลาหมดอายุของ Token จาก In-Memory Store
+    /// </summary>
+    /// <param name="tenantCode">รหัส Tenant เช่น "PoC_MobileShop_01"</param>
+    [HttpGet("status/{tenantCode}")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public IActionResult GetTokenStatus(string tenantCode)
+    {
+        if (!_tenantStore.TryGetByCode(tenantCode, out var tenant) || tenant == null)
+            return NotFound(new { success = false, message = $"ไม่พบ Tenant '{tenantCode}'" });
+
+        return Ok(new
+        {
+            success    = true,
+            tenantCode = tenant.TenantCode,
+            shopName   = tenant.ShopName,
+            access_token = new
+            {
+                is_expired       = tenant.IsAccessTokenExpired,
+                expire_at        = tenant.AccessTokenExpireAt.ToString("u"),
+                remaining_minutes = Math.Round(tenant.AccessTokenRemainingMinutes, 1)
+            },
+            refresh_token = new
+            {
+                is_expired = tenant.IsRefreshTokenExpired,
+                expire_at  = tenant.RefreshTokenExpireAt.ToString("u"),
+            },
+            // แนะนำการดำเนินการถัดไป
+            recommendation = tenant.IsRefreshTokenExpired
+                ? "🔴 RefreshToken หมดอายุ — Seller ต้อง Re-authorize ใหม่ทั้งกระบวนการ"
+                : tenant.IsAccessTokenExpired
+                    ? "🟡 AccessToken หมดอายุ — เรียก POST /api/auth/refresh/{tenantCode} เพื่อต่ออายุ"
+                    : "🟢 Token ยังใช้งานได้ปกติ"
+        });
     }
 }

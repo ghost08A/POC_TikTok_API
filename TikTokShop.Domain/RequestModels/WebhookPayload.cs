@@ -38,3 +38,16 @@ public class WebhookOrderData
     [JsonPropertyName("update_time")]
     public long UpdateTime { get; set; }
 }
+
+
+public class WebhookCancellationData
+{
+    [JsonPropertyName("order_id")]
+    public string OrderId { get; set; } = string.Empty;
+
+    [JsonPropertyName("cancel_status")]
+    public string CancelStatus { get; set; } = string.Empty;
+
+    [JsonPropertyName("update_time")]
+    public long UpdateTime { get; set; }
+}

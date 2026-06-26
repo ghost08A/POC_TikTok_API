@@ -22,57 +22,6 @@ public class OrderController : ControllerBase
     }
 
     // ────────────────────────────────────────────────────────────
-    // GET /api/orders/{tenantCode}
-    // Engine 1 (Pull) — ดึงรายการออเดอร์ของร้านค้าตาม Tenant
-    // ────────────────────────────────────────────────────────────
-    /// <summary>
-    /// [Pull Engine] ดึงรายการ Order ล่าสุดของร้านค้าตาม tenantCode
-    /// </summary>
-    /// <param name="tenantCode">รหัส Tenant เช่น "PoC_MobileShop_01"</param>
-    [HttpGet("{tenantCode}")]
-    [ProducesResponseType(StatusCodes.Status200OK)]
-    [ProducesResponseType(StatusCodes.Status404NotFound)]
-    [ProducesResponseType(StatusCodes.Status502BadGateway)]
-    [ProducesResponseType(StatusCodes.Status500InternalServerError)]
-    public async Task<IActionResult> GetOrdersByTenant(string tenantCode)
-    {
-        _logger.LogInformation("📥 [Pull] ดึงออเดอร์ของ Tenant: {TenantCode}", tenantCode);
-
-        try
-        {
-            var orders = await _orderService.GetOrdersAsync(tenantCode);
-
-            _logger.LogInformation("✅ [Pull] ได้ {Count} รายการ | Tenant={TenantCode}",
-                orders.Count, tenantCode);
-
-            return Ok(new
-            {
-                success    = true,
-                tenantCode = tenantCode,
-                count      = orders.Count,
-                data       = orders
-            });
-        }
-        catch (KeyNotFoundException ex)
-        {
-            _logger.LogWarning("⚠️ [Pull] ไม่พบ Tenant: {TenantCode}", tenantCode);
-            return NotFound(new { success = false, message = ex.Message });
-        }
-        catch (HttpRequestException ex)
-        {
-            _logger.LogError(ex, "❌ [Pull] TikTok API Error | Tenant={TenantCode}", tenantCode);
-            return StatusCode(StatusCodes.Status502BadGateway,
-                new { success = false, message = ex.Message });
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "💥 [Pull] Unexpected Error | Tenant={TenantCode}", tenantCode);
-            return StatusCode(StatusCodes.Status500InternalServerError,
-                new { title = "Internal Server Error", detail = ex.Message });
-        }
-    }
-
-    // ────────────────────────────────────────────────────────────
     // GET /api/orders/detail/{shopId}/{orderId}
     // Manual Fetch — ดึงรายละเอียดออเดอร์รายเดี่ยวโดยไม่รอ Webhook
     // ────────────────────────────────────────────────────────────

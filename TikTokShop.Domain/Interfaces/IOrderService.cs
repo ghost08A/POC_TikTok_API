@@ -11,12 +11,6 @@ namespace TikTokShop.Domain.Interfaces;
 // ================================================================
 public interface IOrderService
 {
-    /// <summary>
-    /// [Pull Engine] ดึงรายการออเดอร์ล่าสุดของร้านค้าตาม Tenant
-    /// เรียก TikTok: GET /order/202309/orders
-    /// </summary>
-    /// <param name="tenantCode">รหัส Tenant ภายในระบบ เช่น "PoC_MobileShop_01"</param>
-    Task<List<CleanOrderDto>> GetOrdersAsync(string tenantCode);
 
     /// <summary>
     /// ดึงรายละเอียดออเดอร์รายเดี่ยวจาก TikTok API แล้ว Print ออก Console
@@ -26,4 +20,6 @@ public interface IOrderService
     /// <param name="shopId">Shop ID (ใช้ค้นหา Tenant จาก TenantStore)</param>
     /// <param name="orderId">Order ID ของ TikTok ที่ต้องการดูรายละเอียด</param>
     Task FetchAndPrintOrderDetailAsync(string shopId, string orderId);
+
+    
 }

@@ -16,21 +16,23 @@ namespace TikTokShop.Domain.Models
     public class TikTokTokenData
     {
         [JsonPropertyName("access_token")]
-        public string AccessToken { get; set; }
+        public string AccessToken { get; set; } = string.Empty;
 
+        // จริง ๆ เป็น Unix timestamp เวลาหมดอายุ
         [JsonPropertyName("access_token_expire_in")]
         public long AccessTokenExpireIn { get; set; }
 
         [JsonPropertyName("refresh_token")]
-        public string RefreshToken { get; set; }
+        public string RefreshToken { get; set; } = string.Empty;
 
+        // จริง ๆ เป็น Unix timestamp เวลาหมดอายุ
         [JsonPropertyName("refresh_token_expire_in")]
         public long RefreshTokenExpireIn { get; set; }
 
         [JsonPropertyName("open_id")]
-        public string OpenId { get; set; } // นี่คือ ShopCipher ของร้าน!
+        public string OpenId { get; set; } = string.Empty;
 
         [JsonPropertyName("seller_name")]
-        public string SellerName { get; set; }
+        public string SellerName { get; set; } = string.Empty;
     }
 }

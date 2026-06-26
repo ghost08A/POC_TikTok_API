@@ -54,13 +54,15 @@ public class ShopService : IShopService
             throw new KeyNotFoundException($"ไม่พบร้านค้ารหัส '{tenantCode}' ในระบบ");
         }
 
-        // ── Step 2: ดึง Config ────────────────────────────────────
-        string appKey    = _config["TikTok:AppKey"]    ?? throw new InvalidOperationException("ไม่พบ TikTok:AppKey");
-        string appSecret = _config["TikTok:AppSecret"] ?? throw new InvalidOperationException("ไม่พบ TikTok:AppSecret");
-        string baseUrl   = _config["TikTok:BaseUrl"]   ?? "https://open-api-sandbox.tiktokglobalshop.com";
+        return await GetAuthorizedShopsByAccessTokenAsync(tenant.AccessToken);
+    }
 
-        // ── Step 3: เตรียม Query Params ──────────────────────────
-        // ⚠️ ห้ามใส่ sign และ access_token ตอนนี้ — ใส่หลัง GenerateSign เท่านั้น
+    public async Task<TikTokAuthorizedShopsResponse> GetAuthorizedShopsByAccessTokenAsync(string accessToken)
+    {
+        string appKey = _config["TikTok:AppKey"] ?? throw new InvalidOperationException("ไม่พบ TikTok:AppKey");
+        string appSecret = _config["TikTok:AppSecret"] ?? throw new InvalidOperationException("ไม่พบ TikTok:AppSecret");
+        string baseUrl = _config["TikTok:BaseUrl"] ?? "https://open-api-sandbox.tiktokglobalshop.com";
+
         string endpointPath = "/authorization/202309/shops";
         var queryParams = new Dictionary<string, string>
         {
@@ -68,32 +70,26 @@ public class ShopService : IShopService
             { "timestamp", DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString() },
         };
 
-        // ── Step 4: สร้าง Signature ───────────────────────────────
         queryParams["sign"] = TikTokSignHelper.GenerateSign(appSecret, endpointPath, queryParams);
 
         string queryString = string.Join("&", queryParams.Select(p => $"{p.Key}={Uri.EscapeDataString(p.Value)}"));
-        string requestUrl  = $"{baseUrl}{endpointPath}?{queryString}";
+        string requestUrl = $"{baseUrl}{endpointPath}?{queryString}";
 
-        _logger.LogDebug("[Shops] URL: {Url}", requestUrl);
-        _logger.LogDebug("[Shops] Tenant={TenantCode} | Sign={Sign}", tenantCode, queryParams["sign"]);
 
         // ── Step 5: ยิง HTTP GET พร้อม Access Token ───────────────
         var client = _httpClientFactory.CreateClient("TikTokClient");
         client.DefaultRequestHeaders.Remove("x-tts-access-token");
-        client.DefaultRequestHeaders.Add("x-tts-access-token", tenant.AccessToken);
+        client.DefaultRequestHeaders.Add("x-tts-access-token", accessToken);
 
         string rawJson;
         try
         {
             var response = await client.GetAsync(requestUrl);
             rawJson = await response.Content.ReadAsStringAsync();
-            _logger.LogInformation("[Shops] HTTP {StatusCode} | Tenant={TenantCode}",
-                (int)response.StatusCode, tenantCode);
-            _logger.LogDebug("[Shops] Raw: {Json}", rawJson);
         }
         catch (HttpRequestException ex)
         {
-            _logger.LogError(ex, "[Shops] HTTP Request ล้มเหลว: {TenantCode}", tenantCode);
+            _logger.LogError(ex, "[Shops] HTTP Request ล้มเหลว");
             throw;
         }
 
@@ -102,16 +98,12 @@ public class ShopService : IShopService
 
         if (result == null)
         {
-            _logger.LogError("[Shops] Deserialize ได้ null สำหรับ {TenantCode}", tenantCode);
+            _logger.LogError("[Shops] Deserialize ได้ null");
             throw new HttpRequestException("ไม่สามารถ Parse JSON Response จาก TikTok ได้");
         }
 
         int shopCount = result.Data?.Shops.Count ?? 0;
-        _logger.LogInformation(
-            "[Shops] ✅ TenantCode={TenantCode} | TikTok Code={Code} | Shops={Count}",
-            tenantCode, result.Code, shopCount);
-
-        // Return raw response (รวม code/message) เพื่อให้ Controller ตัดสินใจต่อ
         return result;
     }
+
 }

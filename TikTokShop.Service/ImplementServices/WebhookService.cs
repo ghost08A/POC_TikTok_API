@@ -63,9 +63,9 @@ public class WebhookService : IWebhookService
                 HandleOrderStatusChanged(payload);
                 break;
 
-            // เพิ่ม case อื่นๆ เมื่อต้องการรองรับ Event เพิ่มเติม เช่น:
-            // case 2: logistics event
-            // case 3: product event
+            case 11:
+                await HandleCancellationStatusChangedAsync(payload);
+                break;
             default:
                 _logger.LogInformation("[Webhook] ℹ️ Event Type={Type} ยังไม่มี Handler", payload.Type);
                 break;

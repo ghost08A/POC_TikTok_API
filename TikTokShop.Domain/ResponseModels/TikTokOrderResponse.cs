@@ -70,3 +70,5 @@ public class TikTokPaymentInfo
     [JsonPropertyName("original_total_product_price")]
     public string OriginalTotalProductPrice { get; set; } = "0";
 }
+
+

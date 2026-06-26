@@ -18,4 +18,6 @@ public interface IShopService
     /// </summary>
     /// <param name="tenantCode">รหัส Tenant ภายในระบบ</param>
     Task<TikTokAuthorizedShopsResponse> GetAuthorizedShopsAsync(string tenantCode);
+
+    Task<TikTokAuthorizedShopsResponse> GetAuthorizedShopsByAccessTokenAsync(string accessToken);
 }

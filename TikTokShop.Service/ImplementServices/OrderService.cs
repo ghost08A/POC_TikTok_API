@@ -26,107 +26,21 @@ public class OrderService : IOrderService
     private readonly IConfiguration           _config;
     private readonly ILogger<OrderService>    _logger;
     private readonly TenantStore              _tenantStore;
+    private readonly IAuthService _authService;   
 
     public OrderService(
         IHttpClientFactory    httpClientFactory,
         IConfiguration        config,
         ILogger<OrderService> logger,
-        TenantStore           tenantStore)
+        TenantStore           tenantStore,
+        IAuthService          authService)
     {
         _httpClientFactory = httpClientFactory;
         _config            = config;
         _logger            = logger;
         _tenantStore       = tenantStore;
+        _authService        = authService;
     }
-
-    // ════════════════════════════════════════════════════════════
-    // GetOrdersAsync — Pull Engine: ดึงรายการออเดอร์
-    // ════════════════════════════════════════════════════════════
-    /// <inheritdoc />
-    public async Task<List<CleanOrderDto>> GetOrdersAsync(string tenantCode)
-    {
-        // ── Step 1: Resolve Tenant จาก TenantStore ───────────────
-        if (!_tenantStore.TryGetByCode(tenantCode, out var tenant) || tenant == null)
-        {
-            _logger.LogWarning("[Orders] ไม่พบ Tenant: {TenantCode}", tenantCode);
-            throw new KeyNotFoundException($"ไม่พบร้านค้ารหัส '{tenantCode}' ในระบบ");
-        }
-
-        _logger.LogInformation("[Orders] กำลังดึงออเดอร์ของ [{ShopName}] ({TenantCode})",
-            tenant.ShopName, tenant.TenantCode);
-
-        // ── Step 2: ดึง Config จาก appsettings ───────────────────
-        string appKey    = _config["TikTok:AppKey"]    ?? throw new InvalidOperationException("ไม่พบ TikTok:AppKey");
-        string appSecret = _config["TikTok:AppSecret"] ?? throw new InvalidOperationException("ไม่พบ TikTok:AppSecret");
-        string baseUrl   = _config["TikTok:BaseUrl"]   ?? "https://open-api-sandbox.tiktokglobalshop.com";
-
-        // ── Step 3: เตรียม Query Params (ยังไม่ใส่ sign) ─────────
-        string endpointPath = "/order/202309/orders";
-        var queryParams = new Dictionary<string, string>
-        {
-            { "app_key",   appKey },
-            { "timestamp", DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString() },
-            // ⚠️ PoC: ใช้ ids mock ก่อน — Production ควร Query จริงๆ ด้วย time_range
-            { "ids",       "584695018161079306" }
-        };
-
-        // ใส่ shop_cipher ถ้ามี (V2 API บังคับต้องมี)
-        if (!string.IsNullOrWhiteSpace(tenant.ShopCipher))
-            queryParams["shop_cipher"] = tenant.ShopCipher;
-
-        // ── Step 4: สร้าง Signature ด้วย TikTokSignHelper ────────
-        // ห้าม Implement HMAC ซ้ำในนี้ — ใช้ Helper เท่านั้น
-        queryParams["sign"] = TikTokSignHelper.GenerateSign(appSecret, endpointPath, queryParams);
-
-        string queryString = string.Join("&", queryParams.Select(p => $"{p.Key}={Uri.EscapeDataString(p.Value)}"));
-        string requestUrl  = $"{baseUrl}{endpointPath}?{queryString}";
-        _logger.LogDebug("[Orders] URL: {Url}", requestUrl);
-
-        // ── Step 5: ยิง HTTP GET พร้อม Access Token ───────────────
-        // Access Token ส่งผ่าน Header x-tts-access-token (ไม่ใช่ Query Param)
-        var client = _httpClientFactory.CreateClient("TikTokClient");
-        client.DefaultRequestHeaders.Remove("x-tts-access-token");
-        client.DefaultRequestHeaders.Add("x-tts-access-token", tenant.AccessToken);
-
-        string rawJson;
-        try
-        {
-            var response = await client.GetAsync(requestUrl);
-            rawJson = await response.Content.ReadAsStringAsync();
-            _logger.LogInformation("[Orders] HTTP {StatusCode}", (int)response.StatusCode);
-            _logger.LogDebug("[Orders] Body: {Json}", rawJson);
-        }
-        catch (HttpRequestException ex)
-        {
-            _logger.LogError(ex, "[Orders] HTTP Request ล้มเหลว: {TenantCode}", tenantCode);
-            throw;
-        }
-
-        // ── Step 6: Deserialize และ Transform → CleanOrderDto ─────
-        var tikTokResponse = JsonSerializer.Deserialize<TikTokApiResponse>(rawJson);
-
-        if (tikTokResponse == null || tikTokResponse.Code != 0)
-        {
-            string errMsg = tikTokResponse?.Message ?? "ไม่สามารถ parse response ได้";
-            _logger.LogWarning("[Orders] TikTok Error: Code={Code}, Msg={Msg}",
-                tikTokResponse?.Code, errMsg);
-            throw new HttpRequestException($"TikTok API Error [{tikTokResponse?.Code}]: {errMsg}");
-        }
-
-        var orders = tikTokResponse.Data?.Orders ?? new List<TikTokOrder>();
-
-        // Map TikTokOrder → CleanOrderDto (เฉพาะ fields ที่จำเป็น)
-        return orders.Select(o => new CleanOrderDto
-        {
-            OrderId          = o.Id,
-            CustomerId       = !string.IsNullOrWhiteSpace(o.BuyerUid) ? o.BuyerUid : o.BuyerEmail,
-            TotalAmountTHB   = decimal.TryParse(o.PaymentInfo?.TotalAmount, out var amt) ? amt : 0m,
-            OrderStatus      = o.Status,
-            CreatedTimestamp = o.CreateTime.ToString(),
-            TenantCode       = tenantCode
-        }).ToList();
-    }
-
     // ════════════════════════════════════════════════════════════
     // FetchAndPrintOrderDetailAsync — ดึงรายละเอียดออเดอร์รายเดี่ยว
     // ════════════════════════════════════════════════════════════
@@ -141,6 +55,7 @@ public class OrderService : IOrderService
             _logger.LogError("[OrderDetail] ❌ ไม่พบร้านค้า ShopId: {ShopId}", shopId);
             return;
         }
+        await EnsureValidAccessTokenAsync(tenant);
 
         // ── Step 2: ดึง Config ────────────────────────────────────
         string appKey    = _config["TikTok:AppKey"]    ?? "";
@@ -166,9 +81,9 @@ public class OrderService : IOrderService
         string requestUrl = $"{baseUrl}{endpointPath}?{queryString}";
 
         // Debug Log: แสดงข้อมูลครบสำหรับ Troubleshooting
-        _logger.LogWarning(
-            "[OrderDetail] 🔍 ShopId={ShopId} | Tenant={TenantCode} | ShopCipher={ShopCipher} | OrderId={OrderId}",
-            shopId, tenant.TenantCode, tenant.ShopCipher, orderId);
+        //_logger.LogWarning(
+        //    "[OrderDetail] 🔍 ShopId={ShopId} | Tenant={TenantCode} | ShopCipher={ShopCipher} | OrderId={OrderId}",
+        //    shopId, tenant.TenantCode, tenant.ShopCipher, orderId);
 
         // ── Step 5: ยิง HTTP Request ──────────────────────────────
         // ใช้ HttpRequestMessage เพื่อควบคุม Header ได้แม่นยำกว่า
@@ -205,7 +120,38 @@ public class OrderService : IOrderService
         Console.WriteLine($"  status       : {orderData.Status}");
         Console.WriteLine($"  total_amount : {orderData.Payment?.TotalAmount} {orderData.Payment?.Currency}");
         Console.WriteLine("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    }
 
-        
+    private async Task EnsureValidAccessTokenAsync(ShopTenant tenant)
+    {
+        if (tenant.IsRefreshTokenExpired)
+        {
+            tenant.Status = "REAUTHORIZE_REQUIRED";
+
+            throw new InvalidOperationException(
+                $"RefreshToken ของร้าน {tenant.TenantCode} หมดอายุแล้ว ต้องให้ร้านเชื่อมต่อ TikTok ใหม่");
+        }
+
+        // Refresh ล่วงหน้า 30 นาที ไม่รอให้หมดจริง
+        if (DateTime.UtcNow.AddMinutes(30) < tenant.AccessTokenExpireAt)
+        {
+            return;
+        }
+
+        _logger.LogWarning(
+            "[Token] AccessToken ใกล้หมดอายุ | Tenant={TenantCode}, ExpireAt={ExpireAt:u}, RemainingMinutes={Minutes}",
+            tenant.TenantCode,
+            tenant.AccessTokenExpireAt,
+            tenant.AccessTokenRemainingMinutes
+        );
+
+        await _authService.RefreshAccessTokenAsync(tenant.TenantCode);
+
+        // หลัง RefreshAccessTokenAsync ต้อง update token ใน TenantStore แล้ว
+        _logger.LogInformation(
+            "[Token] Refresh AccessToken สำเร็จ | Tenant={TenantCode}, NewExpireAt={ExpireAt:u}",
+            tenant.TenantCode,
+            tenant.AccessTokenExpireAt
+        );
     }
 }
