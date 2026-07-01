@@ -51,3 +51,48 @@ public class WebhookCancellationData
     [JsonPropertyName("update_time")]
     public long UpdateTime { get; set; }
 }
+
+public class WebhookReturnData
+{
+    [JsonPropertyName("order_id")]
+    public string OrderId { get; set; } = string.Empty;
+
+    [JsonPropertyName("return_id")]
+    public string? ReturnId { get; set; }
+
+    [JsonPropertyName("return_status")]
+    public string ReturnStatus { get; set; } = string.Empty;
+
+    [JsonPropertyName("update_time")]
+    public long? UpdateTime { get; set; }
+
+    [JsonExtensionData]
+    public Dictionary<string, JsonElement>? ExtraFields { get; set; }
+}
+
+public class WebhookReverseOrderData
+{
+    [JsonPropertyName("order_id")]
+    public string OrderId { get; set; } = string.Empty;
+
+    [JsonPropertyName("reverse_event_type")]
+    public string ReverseEventType { get; set; } = string.Empty;
+
+    [JsonPropertyName("reverse_order_id")]
+    public string? ReverseOrderId { get; set; }
+
+    [JsonPropertyName("reverse_order_status")]
+    public int? ReverseOrderStatus { get; set; }
+
+    [JsonPropertyName("reverse_type")]
+    public int? ReverseType { get; set; }
+
+    [JsonPropertyName("reverse_user")]
+    public int? ReverseUser { get; set; }
+
+    [JsonPropertyName("update_time")]
+    public long? UpdateTime { get; set; }
+
+    [JsonExtensionData]
+    public Dictionary<string, JsonElement>? ExtraFields { get; set; }
+}

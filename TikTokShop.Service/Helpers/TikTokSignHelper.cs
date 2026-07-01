@@ -22,7 +22,7 @@ public static class TikTokSignHelper
 {
 
 
-    public static string GenerateSign(string appSecret,string endpointPath, Dictionary<string, string> queryParams)
+    public static string GenerateSign(string appSecret,string endpointPath, Dictionary<string, string> queryParams, string requestBody = "")
     {
         // Step 1: กรอง sign และ access_token ออก แล้วเรียง Key ตาม Ordinal (ASCII A-Z)
         var sortedKeys = queryParams.Keys
@@ -35,7 +35,7 @@ public static class TikTokSignHelper
             concat.Append(key).Append(queryParams[key]);
 
         // Step 3: ห่อ Sandwich ด้วย AppSecret ทั้งหน้าและหลัง
-        string stringToSign = $"{appSecret}{endpointPath}{concat}{appSecret}";
+        string stringToSign = $"{appSecret}{endpointPath}{concat}{requestBody}{appSecret}";
 
         // Step 4: HMAC-SHA256 โดยใช้ AppSecret เป็น Key
         using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(appSecret));
@@ -45,7 +45,7 @@ public static class TikTokSignHelper
         return Convert.ToHexString(hash).ToLowerInvariant();
     }
 
-
+    //วิธีตรวจสอบ
     public static bool VerifyWebhookSignature(
         string appKey,
         string appSecret,

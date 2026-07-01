@@ -41,7 +41,7 @@ public class WebhookSignatureMiddleware
             await _next(context);
             return;
         }
-
+        //อ่าครังแรกแล้วค่ามันจะเป็น EOF เป็ยนเป็น 0 ด้วยเด้อ
         context.Request.EnableBuffering();
 
         string rawBody;

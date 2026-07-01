@@ -1,3 +1,4 @@
+using TikTokShop.Domain.RequestModels;
 using TikTokShop.Domain.ResponseModels;
 
 namespace TikTokShop.Domain.Interfaces;
@@ -20,6 +21,33 @@ public interface IOrderService
     /// <param name="shopId">Shop ID (ใช้ค้นหา Tenant จาก TenantStore)</param>
     /// <param name="orderId">Order ID ของ TikTok ที่ต้องการดูรายละเอียด</param>
     Task FetchAndPrintOrderDetailAsync(string shopId, string orderId);
+    Task<string?> SearchCancellationByOrderIdAsync(string shopId, string orderId);
+    Task<string?> SearchReturnByOrderIdAsync(
+        string shopId,
+        string orderId,
+        List<string>? returnStatus   = null,
+        List<string>? returnType     = null,
+        DateTime?     createFrom     = null,
+        DateTime?     createTo       = null,
+        string?       pageToken      = null,
+        int           pageSize       = 10);
 
-    
+     Task<string?> SearchOrderListAsync(
+        string shopId,
+        SearchOrderListRequestModel request);
+
+    Task ProcessCancellationWebhookAsync(string shopId,
+        string orderId,
+        string cancelStatus,
+        long webhookTimestamp,
+        string rawWebhookJson);
+
+    Task ProcessReturnWebhookAsync(
+        string shopId,
+        string orderId,
+        string returnStatus,
+        long webhookTimestamp,
+        string rawWebhookJson);
+
+   
 }

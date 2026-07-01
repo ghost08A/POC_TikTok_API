@@ -37,24 +37,8 @@ public class AuthController : ControllerBase
         _shopService = shopService;
     }
 
-    // ────────────────────────────────────────────────────────────
-    // GET /api/auth/callback?code={authCode}&state={state}
-    // OAuth Redirect URI — TikTok Redirect Seller มาที่นี่หลังอนุญาต
-    // ────────────────────────────────────────────────────────────
-    /// <summary>
-    /// [OAuth Callback] รับ Authorization Code จาก TikTok แล้วแลกเป็น Token
-    /// </summary>
-    /// <remarks>
-    /// URL นี้ต้องลงทะเบียนเป็น Redirect URI ใน TikTok Developer Console
-    /// <br/>⚠️ Auth Code หมดอายุเร็วมาก ต้องแลกทันทีที่ได้รับ
-    /// <br/><br/>
-    /// หลังได้ Token แล้ว ให้นำค่าเหล่านี้ไปใส่ใน appsettings.Development.json:
-    /// AccessToken, RefreshToken, AccessTokenExpireAt, RefreshTokenExpireAt, ShopCipher (= open_id)
-    /// </remarks>
+
     [HttpGet("callback")]
-    [ProducesResponseType(StatusCodes.Status200OK)]
-    [ProducesResponseType(StatusCodes.Status400BadRequest)]
-    [ProducesResponseType(StatusCodes.Status500InternalServerError)]
     public async Task<IActionResult> Callback(
         [FromQuery] string  code,
         [FromQuery] string? state = null)
@@ -74,6 +58,11 @@ public class AuthController : ControllerBase
             DateTime timenow = DateTime.UtcNow;
             // 1. แลก code เป็น token
             var tokenData = await _authService.ExchangeCodeForTokenAsync(code);
+
+            if (!string.IsNullOrEmpty(state))
+            {
+                //ตรวจ state ตรงนี้
+            }
 
             // คำนวณวันเวลาหมดอายุ (UTC)
             var accessTokenExpireAt = DateTimeOffset
@@ -100,8 +89,6 @@ public class AuthController : ControllerBase
                 });
             }
 
-            // 4. Upsert ลง Database
-            // ตัวอย่าง field ที่ควรเก็บ:
             var tenant = new ShopTenant
             {
                 TenantCode = $"TikTok_{shop.Id}",

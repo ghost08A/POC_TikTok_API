@@ -62,9 +62,15 @@ public class WebhookService : IWebhookService
             case 1:
                 HandleOrderStatusChanged(payload);
                 break;
+            case 2:
+                HandleReverseStatusChanged(payload, rawBody);
+                break;
 
             case 11:
-                await HandleCancellationStatusChangedAsync(payload);
+                HandleCancellationStatusChanged(payload, rawBody);
+                break;
+            case 12:
+                HandleReturnStatusChanged(payload, rawBody);
                 break;
             default:
                 _logger.LogInformation("[Webhook] ℹ️ Event Type={Type} ยังไม่มี Handler", payload.Type);
@@ -95,18 +101,6 @@ public class WebhookService : IWebhookService
         _logger.LogInformation("[Webhook] 📦 Order Status Changed | OrderId={OrderId} | Status={Status}",
             orderId, orderInfo.OrderStatus);
 
-        // ════════════════════════════════════════════════════════
-        // 🚀 THE MAGIC: Fire-and-Forget Pattern
-        //
-        // สั่งลูกน้องไปหิ้วข้อมูลหลังบ้าน "แบบไม่รอ (Task.Run)"
-        // เพื่อให้ Controller รีบตอบ {code: 0} กลับหา TikTok
-        // ภายใน 0.05 วินาที ไม่เกิด Timeout และ Retry Storm!
-        //
-        // ⚠️ Production Note:
-        //   ควรใช้ IHostedService / BackgroundService หรือ
-        //   Message Queue (RabbitMQ/Azure Service Bus) แทน Task.Run
-        //   เพื่อให้รับประกันได้ว่า Job จะรันสำเร็จแม้ Process Restart
-        // ════════════════════════════════════════════════════════
         _ = Task.Run(async () =>
         {
             try
@@ -120,4 +114,165 @@ public class WebhookService : IWebhookService
             }
         });
     }
+
+    private void HandleCancellationStatusChanged(WebhookPayload payload, string rawBody)
+    {
+        var data = payload.Data.Deserialize<WebhookCancellationData>();
+
+        if (data == null)
+        {
+            _logger.LogWarning("[Webhook:Cancel] Data เป็น null");
+            return;
+        }
+
+        _logger.LogWarning(
+            "[Webhook:Cancel] ShopId={ShopId}, OrderId={OrderId}, CancelStatus={CancelStatus}",
+            payload.ShopId,
+            data.OrderId,
+            data.CancelStatus);
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await _orderService.ProcessCancellationWebhookAsync(
+                    payload.ShopId,
+                    data.OrderId,
+                    data.CancelStatus,
+                    payload.Timestamp,
+                    rawBody);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(
+                    ex,
+                    "[Webhook:Cancel] 💥 ประมวลผล cancellation ล้มเหลว OrderId={OrderId}",
+                    data.OrderId);
+            }
+        });
+    }
+
+    private void HandleReturnStatusChanged(WebhookPayload payload, string rawBody)
+    {
+        var data = payload.Data.Deserialize<WebhookReturnData>();
+
+        if (data == null)
+        {
+            _logger.LogWarning("[Webhook:Return] Data เป็น null");
+            return;
+        }
+
+        _logger.LogWarning(
+            "[Webhook:Return] ShopId={ShopId}, OrderId={OrderId}, ReturnId={ReturnId}, ReturnStatus={ReturnStatus}",
+            payload.ShopId,
+            data.OrderId,
+            data.ReturnId,
+            data.ReturnStatus);
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await _orderService.ProcessReturnWebhookAsync(
+                    payload.ShopId,
+                    data.OrderId,
+                    data.ReturnStatus,
+                    payload.Timestamp,
+                    rawBody);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(
+                    ex,
+                    "[Webhook:Return] 💥 ประมวลผล return/refund ล้มเหลว OrderId={OrderId}",
+                    data.OrderId);
+            }
+        });
+    }
+
+    private void HandleReverseStatusChanged(WebhookPayload payload, string rawBody)
+    {
+        var data = payload.Data.Deserialize<WebhookReverseOrderData>();
+
+        if (data == null)
+        {
+            _logger.LogWarning("[Webhook:Reverse] Data เป็น null");
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(data.OrderId))
+        {
+            _logger.LogWarning("[Webhook:Reverse] ไม่มี OrderId ใน payload | RawBody={RawBody}", rawBody);
+            return;
+        }
+
+        _logger.LogWarning(
+            "[Webhook:Reverse] ShopId={ShopId}, OrderId={OrderId}, ReverseOrderId={ReverseOrderId}, ReverseEventType={ReverseEventType}, ReverseType={ReverseType}, ReverseStatus={ReverseStatus}, ReverseUser={ReverseUser}",
+            payload.ShopId,
+            data.OrderId,
+            data.ReverseOrderId,
+            data.ReverseEventType,
+            data.ReverseType,
+            data.ReverseOrderStatus,
+            data.ReverseUser);
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                // 1. ดู order หลักก่อน เช่น COMPLETED / CANCELLED
+                await _orderService.FetchAndPrintOrderDetailAsync(
+                    payload.ShopId,
+                    data.OrderId);
+
+                // 2. type 2 เป็น reverse/after-sales trigger
+                //    ยังไม่รู้แน่ชัดว่าเป็น cancel หรือ refund
+                //    ดังนั้นให้ค้น returns/refunds ก่อน เพราะเคสล่าสุดของคุณ refund complete แต่ออเดอร์ยัง COMPLETED
+                var returnRawJson = await _orderService.SearchReturnByOrderIdAsync(
+                    payload.ShopId,
+                    data.OrderId);
+
+                if (string.IsNullOrWhiteSpace(returnRawJson))
+                {
+                    _logger.LogInformation(
+                        "[Webhook:Reverse] ไม่พบ return/refund จาก Search Returns | OrderId={OrderId}",
+                        data.OrderId);
+                }
+                else
+                {
+                    _logger.LogWarning(
+                        "[Webhook:Reverse] พบข้อมูล return/refund จาก Search Returns | OrderId={OrderId}",
+                        data.OrderId);
+                }
+
+                // 3. ค้น cancellation เผื่อเป็นเคสยกเลิกก่อน order จบ
+                var cancellationRawJson = await _orderService.SearchCancellationByOrderIdAsync(
+                    payload.ShopId,
+                    data.OrderId);
+
+                if (string.IsNullOrWhiteSpace(cancellationRawJson))
+                {
+                    _logger.LogInformation(
+                        "[Webhook:Reverse] ไม่พบ cancellation จาก Search Cancellations | OrderId={OrderId}",
+                        data.OrderId);
+                }
+                else
+                {
+                    _logger.LogWarning(
+                        "[Webhook:Reverse] พบข้อมูล cancellation จาก Search Cancellations | OrderId={OrderId}",
+                        data.OrderId);
+                }
+
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(
+                    ex,
+                    "[Webhook:Reverse] 💥 ประมวลผล reverse status ล้มเหลว | OrderId={OrderId}",
+                    data.OrderId);
+            }
+        });
+    }
+
+
 }
