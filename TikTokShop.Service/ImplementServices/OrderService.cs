@@ -47,48 +47,39 @@ public class OrderService : IOrderService
     // FetchAndPrintOrderDetailAsync — ดึงรายละเอียดออเดอร์รายเดี่ยว
     // ════════════════════════════════════════════════════════════
     /// <inheritdoc />
-    public async Task FetchAndPrintOrderDetailAsync(string shopId, string orderId)
+    public async Task<string?> FetchAndPrintOrderDetailAsync(string shopId, string orderId)
     {
-        // ── Step 1: ค้นหา Tenant จาก ShopId (Webhook ส่ง shop_id มา) ─
         var tenant = _tenantStore.FindByShopId(shopId);
 
         if (tenant == null)
         {
-            _logger.LogError("[OrderDetail] ❌ ไม่พบร้านค้า ShopId: {ShopId}", shopId);
-            return;
+            _logger.LogError("[OrderDetail] ShopId not found: {ShopId}", shopId);
+            return null;
         }
+
         await EnsureValidAccessTokenAsync(tenant);
 
-        // ── Step 2: ดึง Config ────────────────────────────────────
         string appKey    = _config["TikTok:AppKey"]    ?? "";
         string appSecret = _config["TikTok:AppSecret"] ?? "";
         string baseUrl   = _config["TikTok:BaseUrl"]   ?? "https://open-api-sandbox.tiktokglobalshop.com";
+        _logger.LogInformation("tastURL{url}-----------------------------------------------", baseUrl);
 
-        // ── Step 3: เตรียม Query Params ──────────────────────────
-        // ใช้ Endpoint เวอร์ชัน 202507 ที่รองรับ field ใหม่กว่า
+
         string endpointPath = "/order/202507/orders";
         var queryParams = new Dictionary<string, string>
         {
             { "app_key",     appKey             },
-            { "ids",         orderId            }, // TikTok รับ ids เป็น comma-separated ได้
+            { "ids",         orderId            },
             { "shop_cipher", tenant.ShopCipher  },
             { "timestamp",   DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString() }
         };
 
-        // ── Step 4: สร้าง Signature ───────────────────────────────
         queryParams["sign"] = TikTokSignHelper.GenerateSign(appSecret, endpointPath, queryParams);
 
         string queryString = string.Join("&", queryParams
             .Select(p => $"{p.Key}={Uri.EscapeDataString(p.Value)}"));
         string requestUrl = $"{baseUrl}{endpointPath}?{queryString}";
 
-        // Debug Log: แสดงข้อมูลครบสำหรับ Troubleshooting
-        //_logger.LogWarning(
-        //    "[OrderDetail] 🔍 ShopId={ShopId} | Tenant={TenantCode} | ShopCipher={ShopCipher} | OrderId={OrderId}",
-        //    shopId, tenant.TenantCode, tenant.ShopCipher, orderId);
-
-        // ── Step 5: ยิง HTTP Request ──────────────────────────────
-        // ใช้ HttpRequestMessage เพื่อควบคุม Header ได้แม่นยำกว่า
         using var request = new HttpRequestMessage(HttpMethod.Get, requestUrl);
         request.Headers.Add("x-tts-access-token", tenant.AccessToken);
         request.Headers.Add("Accept", "application/json");
@@ -97,33 +88,10 @@ public class OrderService : IOrderService
         var response = await client.SendAsync(request);
         string rawJson = await response.Content.ReadAsStringAsync();
 
-        _logger.LogWarning("[OrderDetail] HTTP {StatusCode}: {Body}",
-            (int)response.StatusCode, rawJson);
+        _logger.LogWarning("[OrderDetail] HTTP {StatusCode}: {Body}", (int)response.StatusCode, rawJson);
 
-        if (!response.IsSuccessStatusCode)
-            return;
-
-        // ── Step 6: Parse และแสดงผล ──────────────────────────────
-        var apiResult = JsonSerializer.Deserialize<TikTokOrderDetailApiResponse>(rawJson);
-        var orderData = apiResult?.Data?.Orders?.FirstOrDefault();
-
-        if (orderData == null)
-        {
-            _logger.LogWarning("[OrderDetail] ⚠️ ไม่พบ order ใน response: {Json}", rawJson);
-            return;
-        }
-
-        // Print สรุปข้อมูลออเดอร์ออก Console (สำหรับ PoC Demo)
-        Console.WriteLine("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-        Console.WriteLine($"  📦 Order Detail — {orderData.OrderId}");
-        Console.WriteLine("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-        Console.WriteLine($"  order_id     : {orderData.OrderId}");
-        Console.WriteLine($"  user_id      : {orderData.UserId}");
-        Console.WriteLine($"  status       : {orderData.Status}");
-        Console.WriteLine($"  total_amount : {orderData.Payment?.TotalAmount} {orderData.Payment?.Currency}");
-        Console.WriteLine("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        return rawJson;
     }
-
     public async Task<string?> SearchOrderListAsync(
     string shopId,
     SearchOrderListRequestModel request)
@@ -131,7 +99,7 @@ public class OrderService : IOrderService
         var tenant = _tenantStore.FindByShopId(shopId);
         if (tenant == null)
         {
-            _logger.LogError("[OrderList] ❌ ไม่พบร้านค้า ShopId: {ShopId}", shopId);
+            _logger.LogError("[OrderList] ShopId not found: {ShopId}", shopId);
             return null;
         }
 
@@ -142,7 +110,9 @@ public class OrderService : IOrderService
         string baseUrl = _config["TikTok:BaseUrl"]
             ?? "https://open-api-sandbox.tiktokglobalshop.com";
 
-        string endpointPath = $"/order/202309/orders/search";
+       
+
+       string endpointPath = $"/order/202309/orders/search";
 
         // ── Step 3: เตรียม timezone สำหรับแปลง DateTime → Unix ─
         var inputTimeZone = GetInputTimeZone();
@@ -194,9 +164,11 @@ public class OrderService : IOrderService
             bodyObj["create_time_lt"] = now.ToUnixTimeSeconds();
 
             _logger.LogInformation(
-                "[OrderList] ไม่มี time filter → fallback create_time 1 ปี | from={From}({GeVal}) to={To}({LtVal})",
-                from.ToString("yyyy-MM-dd HH:mm:ss"), from.ToUnixTimeSeconds(),
-                now.ToString("yyyy-MM-dd HH:mm:ss"),  now.ToUnixTimeSeconds());
+                "[OrderList] No time filter, fallback create_time 1 year | from={From}({GeVal}) to={To}({LtVal})",
+                from.ToString("yyyy-MM-dd HH:mm:ss"),
+                from.ToUnixTimeSeconds(),
+                now.ToString("yyyy-MM-dd HH:mm:ss"),
+                now.ToUnixTimeSeconds());
         }
 
         if (!string.IsNullOrWhiteSpace(request.OrderStatus))
@@ -234,24 +206,17 @@ public class OrderService : IOrderService
       "application/json");
 
         var client = _httpClientFactory.CreateClient();
+
         _logger.LogInformation(
-        "[OrderList] Request | ShopId={ShopId} | Url={Url} | Body={Body}",
-        shopId,
-        requestUrl,
-        requestBody);
+            "[OrderList] Request | ShopId={ShopId} | Url={Url} | Body={Body}",
+            shopId,
+            requestUrl,
+            requestBody);
 
         var response = await client.SendAsync(httpRequest);
         string rawJson = await response.Content.ReadAsStringAsync();
 
-        _logger.LogWarning(
-            "[OrderList] HTTP {StatusCode}: {Body}",
-            (int)response.StatusCode,
-            rawJson);
-
-        if (!response.IsSuccessStatusCode)
-        {
-            return null;
-        }
+        _logger.LogWarning("[OrderList] HTTP {StatusCode}: {Body}", (int)response.StatusCode, rawJson);
 
         return rawJson;
     }
@@ -351,7 +316,7 @@ public class OrderService : IOrderService
 
         if (tenant == null)
         {
-            _logger.LogError("[CancellationSearch] ❌ ไม่พบร้านค้า ShopId: {ShopId}", shopId);
+            _logger.LogError("[CancellationSearch] ShopId not found: {ShopId}", shopId);
             return null;
         }
 
@@ -411,15 +376,7 @@ public class OrderService : IOrderService
         var response = await client.SendAsync(request);
         string rawJson = await response.Content.ReadAsStringAsync();
 
-        _logger.LogWarning(
-            "[CancellationSearch] HTTP {StatusCode}: {Body}",
-            (int)response.StatusCode,
-            rawJson);
-
-        if (!response.IsSuccessStatusCode)
-        {
-            return null;
-        }
+        _logger.LogWarning("[CancellationSearch] HTTP {StatusCode}: {Body}", (int)response.StatusCode, rawJson);
 
         return rawJson;
     }
@@ -439,7 +396,7 @@ public class OrderService : IOrderService
 
         if (tenant == null)
         {
-            _logger.LogError("[ReturnSearch] ❌ ไม่พบร้านค้า ShopId: {ShopId}", shopId);
+            _logger.LogError("[ReturnSearch] ShopId not found: {ShopId}", shopId);
             return null;
         }
 
@@ -526,15 +483,7 @@ public class OrderService : IOrderService
         var response = await client.SendAsync(request);
         string rawJson = await response.Content.ReadAsStringAsync();
 
-        _logger.LogWarning(
-            "[ReturnSearch] HTTP {StatusCode}: {Body}",
-            (int)response.StatusCode,
-            rawJson);
-
-        if (!response.IsSuccessStatusCode)
-        {
-            return null;
-        }
+        _logger.LogWarning("[ReturnSearch] HTTP {StatusCode}: {Body}", (int)response.StatusCode, rawJson);
 
         return rawJson;
     }

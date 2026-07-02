@@ -20,7 +20,7 @@ public interface IOrderService
     /// </summary>
     /// <param name="shopId">Shop ID (ใช้ค้นหา Tenant จาก TenantStore)</param>
     /// <param name="orderId">Order ID ของ TikTok ที่ต้องการดูรายละเอียด</param>
-    Task FetchAndPrintOrderDetailAsync(string shopId, string orderId);
+    Task<string?> FetchAndPrintOrderDetailAsync(string shopId, string orderId);
     Task<string?> SearchCancellationByOrderIdAsync(string shopId, string orderId);
     Task<string?> SearchReturnByOrderIdAsync(
         string shopId,

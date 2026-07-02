@@ -44,7 +44,7 @@ public class AuthService : IAuthService
     // ExchangeCodeForTokenAsync — แลก Code → Token (Initial)
     // ════════════════════════════════════════════════════════════
     /// <inheritdoc />
-    public async Task<TikTokTokenData> ExchangeCodeForTokenAsync(string authCode)
+    public async Task<TikTokTokenData> ExchangeCodeForTokenAsync(string authCode ,string state = null)
     {
         // ── Step 1: ดึง App Credentials ──────────────────────────
         string appKey    = _config["TikTok:AppKey"]    ?? throw new InvalidOperationException("Missing TikTok:AppKey");
@@ -62,13 +62,15 @@ public class AuthService : IAuthService
         };
 
         string requestUrl = BuildUrl(baseUrl, queryParams);
+        _logger.LogInformation("Code = {code}", authCode);
+
         _logger.LogInformation("[Auth] กำลังแลก Auth Code เป็น Access Token...");
 
         // ── Step 3: ยิง Request และรับ Token ─────────────────────
         var tokenData = await CallAuthApiAsync(requestUrl, "ExchangeCode");
 
         // Log ข้อมูลที่จำเป็นต้องเก็บลง Config (สำหรับ PoC)
-        LogTokenInfo(tokenData);
+        LogTokenInfo(tokenData,state);
 
         return tokenData;
     }
@@ -170,7 +172,7 @@ public class AuthService : IAuthService
     /// <summary>
     /// Log ข้อมูล Token ที่ต้องนำไปอัปเดต appsettings.Development.json
     /// </summary>
-    private void LogTokenInfo(TikTokTokenData data)
+    private void LogTokenInfo(TikTokTokenData data,string state)
     {
         var now                  = DateTime.UtcNow;
         var accessTokenExpireAt  = now.AddSeconds(data.AccessTokenExpireIn);
@@ -183,6 +185,7 @@ public class AuthService : IAuthService
         _logger.LogInformation("[Auth]   RefreshToken         : {Token}",        data.RefreshToken);
         _logger.LogInformation("[Auth]   AccessTokenExpireAt  : {ExpireAt:u}",   accessTokenExpireAt);
         _logger.LogInformation("[Auth]   RefreshTokenExpireAt : {ExpireAt:u}",   refreshTokenExpireAt);
+        _logger.LogInformation("[Auth]   State                : {state}",        state);
         _logger.LogInformation("[Auth] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     }
 }

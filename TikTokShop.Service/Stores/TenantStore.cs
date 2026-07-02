@@ -95,6 +95,9 @@ public class TenantStore
     /// <summary>จำนวน Tenant ที่โหลดได้จาก Config</summary>
     public int Count => _store.Count;
 
+    public void AddOrUpdate(ShopTenant tenant)
+        => _store[tenant.TenantCode] = tenant;
+
     // ── Write Method ───────────────────────────────────────────────
 
     /// <summary>
