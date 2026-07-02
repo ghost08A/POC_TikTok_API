@@ -62,7 +62,7 @@ public class WebhookController : ControllerBase
         // ส่งให้ WebhookService จัดการ (Fire-and-Forget อยู่ภายใน Service)
         await _webhookService.ProcessWebhookAsync(rawBody);
 
-        // ⚡ ตอบ TikTok ทันที — ห้ามรอ Background Job!
+        // ตอบ TikTok ทันที — ห้ามรอ Background Job!
         // TikTok บังคับให้ตอบ code=0 เพื่อยืนยันว่ารับ Event แล้ว
         return Ok(new { code = 0, message = "success" });
     }

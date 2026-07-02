@@ -56,14 +56,6 @@ public class WebhookSignatureMiddleware
 
         context.Request.Body.Position = 0;
 
-        // Debug: เปิดดู headers ก่อนก็ได้
-        //_logger.LogWarning("🚨 --- [TikTok Webhook Headers] ---");
-        //foreach (var header in context.Request.Headers)
-        //{
-        //    _logger.LogInformation("Header: {Key} = {Value}", header.Key, header.Value.ToString());
-        //}
-
-        // TikTok Shop webhook ส่วนใหญ่ใช้ Authorization
         string? receivedSig = context.Request.Headers["Authorization"].FirstOrDefault();
 
         if (string.IsNullOrWhiteSpace(receivedSig))

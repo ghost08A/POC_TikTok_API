@@ -154,8 +154,8 @@ public class AuthController : ControllerBase
             tenant.ConnectedAt,
             tenant.AccessTokenExpireAt,
             tenant.RefreshTokenExpireAt,
-            MaskSecret(tenant.AccessToken),
-            MaskSecret(tenant.RefreshToken));
+            tenant.AccessToken,
+            tenant.RefreshToken);
     }
 
     private static string MaskSecret(string value)

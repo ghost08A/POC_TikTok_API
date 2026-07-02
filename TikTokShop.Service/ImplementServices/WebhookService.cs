@@ -44,13 +44,14 @@ public class WebhookService : IWebhookService
         // ── Step 1: Parse Webhook Envelope (ซองนอก) ──────────────
         var payload = JsonSerializer.Deserialize<WebhookPayload>(rawBody);
 
-        _logger.LogWarning("[Webhook] Raw Body: {RawBody}", rawBody);
-
         if (payload == null)
         {
+            LogIncomingWebhookPayload(null, rawBody);
             _logger.LogWarning("[Webhook] ⚠️ Parse Payload ได้ null — ไม่ดำเนินการต่อ");
             return Task.CompletedTask;
         }
+
+        LogIncomingWebhookPayload(payload, rawBody);
 
         _logger.LogInformation("[Webhook] Event Type={Type} | ShopId={ShopId} | Timestamp={Ts}",
             payload.Type, payload.ShopId, payload.Timestamp);
@@ -82,6 +83,62 @@ public class WebhookService : IWebhookService
     }
 
     // ════════════════════════════════════════════════════════════
+    private void LogIncomingWebhookPayload(WebhookPayload? payload, string rawBody)
+    {
+        var type = payload?.Type;
+        var typeName = type.HasValue ? GetWebhookTypeName(type.Value) : "Invalid Payload";
+
+        _logger.LogInformation(
+            """
+            [Webhook] Incoming TikTok Payload
+            --------------------------------------------------
+            Type      : {Type}
+            TypeName  : {TypeName}
+            ShopId    : {ShopId}
+            Timestamp : {Timestamp}
+            Size      : {Size} bytes
+            --------------------------------------------------
+            """,
+            type?.ToString() ?? "-",
+            typeName,
+            payload?.ShopId ?? "-",
+            payload?.Timestamp.ToString() ?? "-",
+            rawBody.Length);
+
+        _logger.LogInformation(
+            "[Webhook] Payload from {TypeName}:{NewLine}{Payload}",
+            typeName,
+            Environment.NewLine,
+            TryFormatJson(rawBody));
+    }
+
+    private static string GetWebhookTypeName(int type)
+    {
+        return type switch
+        {
+            1 => "Order Status Changed",
+            2 => "Reverse / After-Sales Status Changed",
+            11 => "Cancellation Status Changed",
+            12 => "Return / Refund Status Changed",
+            _ => $"Unknown Type {type}"
+        };
+    }
+
+    private static string TryFormatJson(string rawJson)
+    {
+        if (string.IsNullOrWhiteSpace(rawJson)) return "(empty)";
+
+        try
+        {
+            using var document = JsonDocument.Parse(rawJson);
+            return JsonSerializer.Serialize(document.RootElement, new JsonSerializerOptions { WriteIndented = true });
+        }
+        catch (JsonException)
+        {
+            return rawJson;
+        }
+    }
+
     // Private: HandleOrderStatusChanged — Handler สำหรับ Type 1
     // ════════════════════════════════════════════════════════════
     private void HandleOrderStatusChanged(WebhookPayload payload)

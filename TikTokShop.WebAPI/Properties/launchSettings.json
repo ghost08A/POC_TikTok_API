@@ -9,7 +9,6 @@
     }
   },
   "profiles": {
-    // ── Development (ใช้ appsettings.Development.json) ───────────
     "http": {
       "commandName": "Project",
       "dotnetRunMessages": true,
@@ -30,9 +29,6 @@
         "ASPNETCORE_ENVIRONMENT": "Development"
       }
     },
-
-    // ── Sandbox (ใช้ appsettings.Sandbox.json — port 5101) ───────
-    // สำหรับ worktree โฟลเดอร์ที่ 1 หรือทดสอบ Sandbox API
     "LYT-Sandbox": {
       "commandName": "Project",
       "dotnetRunMessages": true,
@@ -43,9 +39,6 @@
         "ASPNETCORE_ENVIRONMENT": "Sandbox"
       }
     },
-
-    // ── RealShop (ใช้ appsettings.RealShop.json — port 5201) ─────
-    // สำหรับ worktree โฟลเดอร์ที่ 2 หรือรัน Production API
     "LYT-RealShop": {
       "commandName": "Project",
       "dotnetRunMessages": true,
@@ -56,7 +49,6 @@
         "ASPNETCORE_ENVIRONMENT": "RealShop"
       }
     },
-
     "IIS Express": {
       "commandName": "IISExpress",
       "launchBrowser": true,
