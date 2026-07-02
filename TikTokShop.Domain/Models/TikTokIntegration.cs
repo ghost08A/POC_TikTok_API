@@ -1,4 +1,4 @@
-﻿using System.Text.Json.Serialization;
+using System.Text.Json.Serialization;
 namespace TikTokShop.Domain.Models
 {
     public class TikTokTokenResponse
@@ -7,10 +7,10 @@ namespace TikTokShop.Domain.Models
         public int Code { get; set; }
 
         [JsonPropertyName("message")]
-        public string Message { get; set; }
+        public string? Message { get; set; }
 
         [JsonPropertyName("data")]
-        public TikTokTokenData Data { get; set; }
+        public TikTokTokenData? Data { get; set; }
     }
 
     public class TikTokTokenData

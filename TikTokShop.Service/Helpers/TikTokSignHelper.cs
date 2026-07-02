@@ -1,7 +1,6 @@
 using Microsoft.Extensions.Logging;
 using System.Security.Cryptography;
 using System.Text;
-using System.Text.Json;
 
 namespace TikTokShop.Service.Helpers;
 
@@ -14,15 +13,26 @@ namespace TikTokShop.Service.Helpers;
 //   1. คัดแยก Query Params ออก (ห้ามเอา `sign` และ `access_token` มาร่วม)
 //   2. เรียงลำดับ Key ตาม ASCII/Ordinal (A-Z)
 //   3. Concat Key+Value ติดกัน: "app_key{val}timestamp{val}"
-//   4. ห่อ Sandwich: {AppSecret}{ConcatString}{AppSecret}
+//   4. ห่อ Sandwich: {AppSecret}{EndpointPath}{ConcatString}{Body}{AppSecret}
 //   5. HMAC-SHA256(key=AppSecret, message=SandwichString)
 //   6. แปลงเป็น Hex Lowercase
 // ================================================================
 public static class TikTokSignHelper
 {
+    // ── Generate Sign ─────────────────────────────────────────────
 
-
-    public static string GenerateSign(string appSecret,string endpointPath, Dictionary<string, string> queryParams, string requestBody = "")
+    /// <summary>
+    /// สร้าง HMAC-SHA256 Signature สำหรับ TikTok Open API Request
+    /// </summary>
+    /// <param name="appSecret">App Secret จาก TikTok Developer Portal</param>
+    /// <param name="endpointPath">API Path เช่น /order/202507/orders</param>
+    /// <param name="queryParams">Query params ที่จะ sign (ไม่รวม sign/access_token)</param>
+    /// <param name="requestBody">Request Body (เฉพาะ POST — ว่างได้สำหรับ GET)</param>
+    public static string GenerateSign(
+        string appSecret,
+        string endpointPath,
+        Dictionary<string, string> queryParams,
+        string requestBody = "")
     {
         // Step 1: กรอง sign และ access_token ออก แล้วเรียง Key ตาม Ordinal (ASCII A-Z)
         var sortedKeys = queryParams.Keys
@@ -45,12 +55,23 @@ public static class TikTokSignHelper
         return Convert.ToHexString(hash).ToLowerInvariant();
     }
 
-    //วิธีตรวจสอบ
+    // ── Verify Webhook Signature ──────────────────────────────────
+
+    /// <summary>
+    /// ตรวจสอบ HMAC-SHA256 Signature จาก TikTok Webhook Header
+    /// stringToSign = appKey + rawBody
+    /// </summary>
+    /// <param name="appKey">App Key จาก TikTok Developer Portal</param>
+    /// <param name="appSecret">App Secret จาก TikTok Developer Portal</param>
+    /// <param name="rawBody">Raw HTTP Body ที่รับมา</param>
+    /// <param name="receivedSignature">ค่า Signature จาก Header ที่ต้องตรวจสอบ</param>
+    /// <param name="logger">Optional logger สำหรับ debug output</param>
     public static bool VerifyWebhookSignature(
-        string appKey,
-        string appSecret,
-        string rawBody,
-        string receivedSignature)
+        string   appKey,
+        string   appSecret,
+        string   rawBody,
+        string   receivedSignature,
+        ILogger? logger = null)
     {
         if (string.IsNullOrWhiteSpace(appKey))
             throw new ArgumentException("Missing appKey");
@@ -63,26 +84,23 @@ public static class TikTokSignHelper
 
         var target = receivedSignature.Trim().ToLowerInvariant();
 
-        // TikTok Shop Webhook:
-        // stringToSign = appKey + rawBody
-        // sign = HMAC_SHA256(appSecret, stringToSign)
         var stringToSign = appKey + rawBody;
+        using var hmac   = new HMACSHA256(Encoding.UTF8.GetBytes(appSecret));
+        var hash         = hmac.ComputeHash(Encoding.UTF8.GetBytes(stringToSign));
+        var calculated   = Convert.ToHexString(hash).ToLowerInvariant();
 
-        using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(appSecret));
-        var hash = hmac.ComputeHash(Encoding.UTF8.GetBytes(stringToSign));
-        var calculated = Convert.ToHexString(hash).ToLowerInvariant();
+        bool isMatch = FixedTimeEquals(calculated, target);
 
-        Console.ForegroundColor = ConsoleColor.Cyan;
-        Console.WriteLine("\n🔐 --- [TikTok Shop Webhook Signature Check] ---");
-        Console.WriteLine($"Target     : {target}");
-        Console.WriteLine($"Calculated : {calculated}");
-        Console.WriteLine(calculated == target ? "✅ MATCH" : "❌ NOT MATCH");
-        Console.WriteLine("-----------------------------------------------\n");
-        Console.ResetColor();
+        logger?.LogDebug(
+            "[WebhookSign] Target={Target} | Calculated={Calculated} | Match={Match}",
+            target, calculated, isMatch);
 
-        return FixedTimeEquals(calculated, target);
+        return isMatch;
     }
 
+    // ── Private ───────────────────────────────────────────────────
+
+    /// <summary>เปรียบเทียบ string แบบ Constant Time (ป้องกัน Timing Attack)</summary>
     private static bool FixedTimeEquals(string a, string b)
     {
         var aBytes = Encoding.UTF8.GetBytes(a);

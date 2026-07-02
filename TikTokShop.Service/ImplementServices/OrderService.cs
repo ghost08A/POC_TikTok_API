@@ -1,11 +1,10 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
-using System.Text;
 using System.Text.Json;
 using TikTokShop.Domain.Interfaces;
 using TikTokShop.Domain.Models;
 using TikTokShop.Domain.RequestModels;
-using TikTokShop.Domain.ResponseModels;
+using TikTokShop.Service.Config;
 using TikTokShop.Service.Helpers;
 using TikTokShop.Service.Stores;
 
@@ -15,20 +14,25 @@ namespace TikTokShop.Service.ImplementServices;
 // OrderService.cs — Order Management Service
 //
 // รับผิดชอบ:
-//   1. GetOrdersAsync        — Pull Engine: ดึงรายการออเดอร์ทั้งหมด
-//   2. FetchAndPrintOrderDetailAsync — ดึงรายละเอียดออเดอร์รายเดี่ยว
+//   1. FetchAndPrintOrderDetailAsync  — ดึงรายละเอียดออเดอร์รายเดี่ยว
+//   2. SearchOrderListAsync           — ค้นหารายการออเดอร์
+//   3. SearchCancellationByOrderIdAsync — ดึงรายละเอียดการยกเลิก
+//   4. SearchReturnByOrderIdAsync     — ดึงรายละเอียด Return/Refund
+//   5. ProcessCancellationWebhookAsync / ProcessReturnWebhookAsync — ประมวลผล Webhook
 //
 // TikTok Endpoints ที่ใช้:
-//   - GET /order/202309/orders   (รายการออเดอร์)
-//   - GET /order/202507/orders   (รายละเอียด รองรับ fields ใหม่กว่า)
+//   GET  /order/202507/orders                        — รายละเอียดออเดอร์
+//   POST /order/202309/orders/search                 — ค้นหาออเดอร์
+//   POST /return_refund/202602/cancellations/search  — ค้นหาการยกเลิก
+//   POST /return_refund/202602/returns/search        — ค้นหา Return/Refund
 // ================================================================
 public class OrderService : IOrderService
 {
-    private readonly IHttpClientFactory       _httpClientFactory;
-    private readonly IConfiguration           _config;
-    private readonly ILogger<OrderService>    _logger;
-    private readonly TenantStore              _tenantStore;
-    private readonly IAuthService _authService;   
+    private readonly IHttpClientFactory    _httpClientFactory;
+    private readonly IConfiguration       _config;
+    private readonly ILogger<OrderService> _logger;
+    private readonly TenantStore          _tenantStore;
+    private readonly IAuthService         _authService;
 
     public OrderService(
         IHttpClientFactory    httpClientFactory,
@@ -41,346 +45,84 @@ public class OrderService : IOrderService
         _config            = config;
         _logger            = logger;
         _tenantStore       = tenantStore;
-        _authService        = authService;
+        _authService       = authService;
     }
+
     // ════════════════════════════════════════════════════════════
     // FetchAndPrintOrderDetailAsync — ดึงรายละเอียดออเดอร์รายเดี่ยว
     // ════════════════════════════════════════════════════════════
     /// <inheritdoc />
     public async Task<string?> FetchAndPrintOrderDetailAsync(string shopId, string orderId)
     {
-        var tenant = _tenantStore.FindByShopId(shopId);
+        var tenant = await ResolveTenantAsync(shopId, "[OrderDetail]");
+        if (tenant == null) return null;
 
-        if (tenant == null)
-        {
-            _logger.LogError("[OrderDetail] ShopId not found: {ShopId}", shopId);
-            return null;
-        }
+        var cfg = TikTokAppConfig.FromConfig(_config);
+        const string endpoint = "/order/202507/orders";
 
-        await EnsureValidAccessTokenAsync(tenant);
+        var queryParams = TikTokRequestBuilder.CreateShopParams(cfg.AppKey, tenant.ShopCipher);
+        queryParams["ids"] = orderId;
 
-        string appKey    = _config["TikTok:AppKey"]    ?? "";
-        string appSecret = _config["TikTok:AppSecret"] ?? "";
-        string baseUrl   = _config["TikTok:BaseUrl"]   ?? "https://open-api-sandbox.tiktokglobalshop.com";
-        _logger.LogInformation("tastURL{url}-----------------------------------------------", baseUrl);
+        string url = TikTokRequestBuilder.BuildSignedGetUrl(cfg.BaseUrl, endpoint, cfg.AppSecret, queryParams);
 
-
-        string endpointPath = "/order/202507/orders";
-        var queryParams = new Dictionary<string, string>
-        {
-            { "app_key",     appKey             },
-            { "ids",         orderId            },
-            { "shop_cipher", tenant.ShopCipher  },
-            { "timestamp",   DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString() }
-        };
-
-        queryParams["sign"] = TikTokSignHelper.GenerateSign(appSecret, endpointPath, queryParams);
-
-        string queryString = string.Join("&", queryParams
-            .Select(p => $"{p.Key}={Uri.EscapeDataString(p.Value)}"));
-        string requestUrl = $"{baseUrl}{endpointPath}?{queryString}";
-
-        using var request = new HttpRequestMessage(HttpMethod.Get, requestUrl);
-        request.Headers.Add("x-tts-access-token", tenant.AccessToken);
-        request.Headers.Add("Accept", "application/json");
-
-        var client   = _httpClientFactory.CreateClient();
-        var response = await client.SendAsync(request);
-        string rawJson = await response.Content.ReadAsStringAsync();
-
-        _logger.LogWarning("[OrderDetail] HTTP {StatusCode}: {Body}", (int)response.StatusCode, rawJson);
-
-        return rawJson;
+        var apiClient = new TikTokApiClient(_httpClientFactory, _logger);
+        return await apiClient.GetAsync(url, tenant.AccessToken, "[OrderDetail]");
     }
-    public async Task<string?> SearchOrderListAsync(
-    string shopId,
-    SearchOrderListRequestModel request)
+
+    // ════════════════════════════════════════════════════════════
+    // SearchOrderListAsync — ค้นหารายการออเดอร์
+    // ════════════════════════════════════════════════════════════
+    /// <inheritdoc />
+    public async Task<string?> SearchOrderListAsync(string shopId, SearchOrderListRequestModel request)
     {
-        var tenant = _tenantStore.FindByShopId(shopId);
-        if (tenant == null)
-        {
-            _logger.LogError("[OrderList] ShopId not found: {ShopId}", shopId);
-            return null;
-        }
+        var tenant = await ResolveTenantAsync(shopId, "[OrderList]");
+        if (tenant == null) return null;
 
-        await EnsureValidAccessTokenAsync(tenant);
+        var cfg = TikTokAppConfig.FromConfig(_config);
+        const string endpoint = "/order/202309/orders/search";
 
-        string appKey = _config["TikTok:AppKey"] ?? "";
-        string appSecret = _config["TikTok:AppSecret"] ?? "";
-        string baseUrl = _config["TikTok:BaseUrl"]
-            ?? "https://open-api-sandbox.tiktokglobalshop.com";
+        var pageSize = Math.Clamp(request.PageSize <= 0 ? 50 : request.PageSize, 1, 100);
 
-       
-
-       string endpointPath = $"/order/202309/orders/search";
-
-        // ── Step 3: เตรียม timezone สำหรับแปลง DateTime → Unix ─
-        var inputTimeZone = GetInputTimeZone();
-        // ── Step 4: query params ─────────────────────────────────
-        var pageSize = request.PageSize <= 0 ? 50 : request.PageSize;
-        pageSize = Math.Min(pageSize, 100);
-
-        var queryParams = new Dictionary<string, string>
-        {
-            { "app_key",     appKey },
-            { "shop_cipher", tenant.ShopCipher },
-            { "timestamp",   DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString() },
-            { "page_size",   pageSize.ToString() }
-        };
+        var queryParams = TikTokRequestBuilder.CreateShopParams(cfg.AppKey, tenant.ShopCipher);
+        queryParams["page_size"] = pageSize.ToString();
 
         if (!string.IsNullOrWhiteSpace(request.PageToken))
             queryParams["page_token"] = request.PageToken;
 
-        // ── Step 5: body filter ──────────────────────────────────
-        var bodyObj = new Dictionary<string, object>();
+        string requestBody = JsonSerializer.Serialize(BuildOrderSearchBody(request));
 
-        if (request.CreateTimeFrom.HasValue)
-            bodyObj["create_time_ge"] = ToUnixSeconds(request.CreateTimeFrom.Value, inputTimeZone);
-
-        if (request.CreateTimeTo.HasValue)
-            bodyObj["create_time_lt"] = ToUnixSeconds(request.CreateTimeTo.Value, inputTimeZone);
-
-        if (request.UpdateTimeFrom.HasValue)
-            bodyObj["update_time_ge"] = ToUnixSeconds(request.UpdateTimeFrom.Value, inputTimeZone);
-
-        if (request.UpdateTimeTo.HasValue)
-            bodyObj["update_time_lt"] = ToUnixSeconds(request.UpdateTimeTo.Value, inputTimeZone);
-
-        // sort ต้องอยู่ใน body (TikTok 202309 spec)
-        bodyObj["sort_field"] = string.IsNullOrWhiteSpace(request.SortField) ? "create_time" : request.SortField;
-        bodyObj["sort_order"] = string.IsNullOrWhiteSpace(request.SortOrder) ? "DESC"        : request.SortOrder;
-
-        // ── TikTok API 202309 ต้องมี time range เสมอ ────────────────
-        // fallback: create_time ย้อนหลัง 1 ปี — ครอบคลุม sandbox orders ทุกชุด
-        bool hasTimeFilter =
-            request.CreateTimeFrom.HasValue || request.CreateTimeTo.HasValue ||
-            request.UpdateTimeFrom.HasValue || request.UpdateTimeTo.HasValue;
-
-        if (!hasTimeFilter)
-        {
-            var now  = DateTimeOffset.UtcNow;
-            var from = now.AddDays(-365);
-            bodyObj["create_time_ge"] = from.ToUnixTimeSeconds();
-            bodyObj["create_time_lt"] = now.ToUnixTimeSeconds();
-
-            _logger.LogInformation(
-                "[OrderList] No time filter, fallback create_time 1 year | from={From}({GeVal}) to={To}({LtVal})",
-                from.ToString("yyyy-MM-dd HH:mm:ss"),
-                from.ToUnixTimeSeconds(),
-                now.ToString("yyyy-MM-dd HH:mm:ss"),
-                now.ToUnixTimeSeconds());
-        }
-
-        if (!string.IsNullOrWhiteSpace(request.OrderStatus))
-            bodyObj["order_status"] = request.OrderStatus;
-
-        if (!string.IsNullOrWhiteSpace(request.BuyerUserId))
-            bodyObj["buyer_user_id"] = request.BuyerUserId;
-
-        if (!string.IsNullOrWhiteSpace(request.ShippingType))
-            bodyObj["shipping_type"] = request.ShippingType;
-
-        string requestBody = JsonSerializer.Serialize(bodyObj);
-
-        // ── Step 6: sign ต้องใช้ body จริงที่ส่ง ───────────────
-        queryParams["sign"] = TikTokSignHelper.GenerateSign(
-            appSecret,
-            endpointPath,
-            queryParams,
-            requestBody);
-
-        string queryString = string.Join("&", queryParams
-            .Select(p => $"{p.Key}={Uri.EscapeDataString(p.Value)}"));
-
-        string requestUrl = $"{baseUrl}{endpointPath}?{queryString}";
-
-        // ── Step 7: ยิง request ─────────────────────────────────
-        using var httpRequest = new HttpRequestMessage(HttpMethod.Post, requestUrl);
-
-        httpRequest.Headers.Add("x-tts-access-token", tenant.AccessToken);
-        httpRequest.Headers.Add("Accept", "application/json");
-
-        httpRequest.Content = new StringContent(
-      requestBody,
-      Encoding.UTF8,
-      "application/json");
-
-        var client = _httpClientFactory.CreateClient();
+        string url = TikTokRequestBuilder.BuildSignedPostUrl(cfg.BaseUrl, endpoint, cfg.AppSecret, queryParams, requestBody);
 
         _logger.LogInformation(
-            "[OrderList] Request | ShopId={ShopId} | Url={Url} | Body={Body}",
-            shopId,
-            requestUrl,
-            requestBody);
+            "[OrderList] ShopId={ShopId} | Url={Url} | Body={Body}",
+            shopId, url, requestBody);
 
-        var response = await client.SendAsync(httpRequest);
-        string rawJson = await response.Content.ReadAsStringAsync();
-
-        _logger.LogWarning("[OrderList] HTTP {StatusCode}: {Body}", (int)response.StatusCode, rawJson);
-
-        return rawJson;
+        var apiClient = new TikTokApiClient(_httpClientFactory, _logger);
+        return await apiClient.PostJsonAsync(url, tenant.AccessToken, requestBody, "[OrderList]");
     }
 
-
-    public async Task ProcessCancellationWebhookAsync(
-   string shopId,
-   string orderId,
-   string cancelStatus,
-   long webhookTimestamp,
-   string rawWebhookJson)
-    {
-        _logger.LogWarning(
-            "[CancellationService] เริ่มประมวลผล Cancellation | ShopId={ShopId} | OrderId={OrderId} | CancelStatus={CancelStatus}",
-            shopId,
-            orderId,
-            cancelStatus);
-
-        // Step 1: ดึง Order Detail 
-        await FetchAndPrintOrderDetailAsync(shopId, orderId);
-
-        // Step 2: ดึงรายละเอียดการยกเลิกจาก TikTok Search Cancellations API
-        var cancellationRawJson = await SearchCancellationByOrderIdAsync(shopId, orderId);
-
-        if (string.IsNullOrWhiteSpace(cancellationRawJson))
-        {
-            _logger.LogWarning(
-                "[CancellationService] ไม่พบรายละเอียด cancellation จาก TikTok | OrderId={OrderId}",
-                orderId);
-        }
-        else
-        {
-            _logger.LogWarning(
-                "[CancellationService] ได้รายละเอียด cancellation แล้ว | OrderId={OrderId}",
-                orderId);
-
-            _logger.LogWarning(
-                "[CancellationService] Cancellation RawJson: {RawJson}",
-                cancellationRawJson);
-        }
-
-        // Step 3: ถ้าสถานะ cancel จบแล้ว ค่อยเตรียมหักแต้ม
-        if (cancelStatus is
-            "CANCELLATION_REQUEST_SUCCESS" or
-            "CANCELLATION_REQUEST_COMPLETE")
-        {
-            _logger.LogWarning(
-                "[CancellationService] Cancellation สำเร็จแล้ว OrderId={OrderId} ต่อไปต้องเตรียม REVERSE แต้ม",
-                orderId);
-
-            // TODO ขั้นต่อไป:
-            // 1. Parse cancellationRawJson
-            // 2. เก็บ cancellation detail ลง DB / InMemory
-            // 3. เช็คว่า order นี้เคยได้แต้มแล้วหรือยัง
-            // 4. ถ้าเคยได้แต้มแล้ว และยังไม่เคย REVERSE → สร้าง PointTransaction แบบ REVERSE
-        }
-    }
-
-
-    private async Task EnsureValidAccessTokenAsync(ShopTenant tenant)
-    {
-        if (tenant.IsRefreshTokenExpired)
-        {
-            tenant.Status = "REAUTHORIZE_REQUIRED";
-
-            throw new InvalidOperationException(
-                $"RefreshToken ของร้าน {tenant.TenantCode} หมดอายุแล้ว ต้องให้ร้านเชื่อมต่อ TikTok ใหม่");
-        }
-
-        // Refresh ล่วงหน้า 30 นาที ไม่รอให้หมดจริง
-        if (DateTime.UtcNow.AddMinutes(30) < tenant.AccessTokenExpireAt)
-        {
-            return;
-        }
-
-        _logger.LogWarning(
-            "[Token] AccessToken ใกล้หมดอายุ | Tenant={TenantCode}, ExpireAt={ExpireAt:u}, RemainingMinutes={Minutes}",
-            tenant.TenantCode,
-            tenant.AccessTokenExpireAt,
-            tenant.AccessTokenRemainingMinutes
-        );
-
-        await _authService.RefreshAccessTokenAsync(tenant.TenantCode);
-
-        // หลัง RefreshAccessTokenAsync ต้อง update token ใน TenantStore แล้ว
-        _logger.LogInformation(
-            "[Token] Refresh AccessToken สำเร็จ | Tenant={TenantCode}, NewExpireAt={ExpireAt:u}",
-            tenant.TenantCode,
-            tenant.AccessTokenExpireAt
-        );
-    }
-
+    // ════════════════════════════════════════════════════════════
+    // SearchCancellationByOrderIdAsync — ดึงรายละเอียดการยกเลิก
+    // ════════════════════════════════════════════════════════════
     public async Task<string?> SearchCancellationByOrderIdAsync(string shopId, string orderId)
     {
-        // ── Step 1: หา tenant จาก shopId ─────────────────────────
-        var tenant = _tenantStore.FindByShopId(shopId);
+        var tenant = await ResolveTenantAsync(shopId, "[CancellationSearch]");
+        if (tenant == null) return null;
 
-        if (tenant == null)
-        {
-            _logger.LogError("[CancellationSearch] ShopId not found: {ShopId}", shopId);
-            return null;
-        }
+        var cfg = TikTokAppConfig.FromConfig(_config);
+        const string endpoint = "/return_refund/202602/cancellations/search";
 
-        await EnsureValidAccessTokenAsync(tenant);
+        var queryParams  = TikTokRequestBuilder.CreateShopParams(cfg.AppKey, tenant.ShopCipher);
+        string body      = JsonSerializer.Serialize(new { order_ids = new[] { orderId }, page_size = 10 });
+        string url       = TikTokRequestBuilder.BuildSignedPostUrl(cfg.BaseUrl, endpoint, cfg.AppSecret, queryParams, body);
 
-        // ── Step 2: ดึง config ───────────────────────────────────
-        string appKey = _config["TikTok:AppKey"] ?? "";
-        string appSecret = _config["TikTok:AppSecret"] ?? "";
-        string baseUrl = _config["TikTok:BaseUrl"]
-            ?? "https://open-api-sandbox.tiktokglobalshop.com";
-
-        // ใช้ endpoint Search Cancellations 
-        string endpointPath = "/return_refund/202602/cancellations/search";
-
-        // ── Step 3: query params ─────────────────────────────────
-        var queryParams = new Dictionary<string, string>
-    {
-        { "app_key", appKey },
-        { "shop_cipher", tenant.ShopCipher },
-        { "timestamp", DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString() }
-    };
-
-        // ── Step 4: body สำหรับ POST ─────────────────────────────
-        var bodyObj = new
-        {
-            order_ids = new[] { orderId },
-            page_size = 10
-        };
-
-        string requestBody = JsonSerializer.Serialize(bodyObj);
-
-        // ── Step 5: sign ต้องเอา requestBody เข้าไปด้วย ─────────
-        queryParams["sign"] = TikTokSignHelper.GenerateSign(
-            appSecret,
-            endpointPath,
-            queryParams,
-            requestBody);
-
-        string queryString = string.Join("&", queryParams
-            .Select(p => $"{p.Key}={Uri.EscapeDataString(p.Value)}"));
-
-        string requestUrl = $"{baseUrl}{endpointPath}?{queryString}";
-
-        // ── Step 6: ยิง request ─────────────────────────────────
-        using var request = new HttpRequestMessage(HttpMethod.Post, requestUrl);
-
-        request.Headers.Add("x-tts-access-token", tenant.AccessToken);
-        request.Headers.Add("Accept", "application/json");
-
-        request.Content = new StringContent(
-            requestBody,
-            Encoding.UTF8,
-            "application/json");
-
-        var client = _httpClientFactory.CreateClient();
-
-        var response = await client.SendAsync(request);
-        string rawJson = await response.Content.ReadAsStringAsync();
-
-        _logger.LogWarning("[CancellationSearch] HTTP {StatusCode}: {Body}", (int)response.StatusCode, rawJson);
-
-        return rawJson;
+        var apiClient = new TikTokApiClient(_httpClientFactory, _logger);
+        return await apiClient.PostJsonAsync(url, tenant.AccessToken, body, "[CancellationSearch]");
     }
 
+    // ════════════════════════════════════════════════════════════
+    // SearchReturnByOrderIdAsync — ดึงรายละเอียด Return/Refund
+    // ════════════════════════════════════════════════════════════
     public async Task<string?> SearchReturnByOrderIdAsync(
         string        shopId,
         string        orderId,
@@ -391,193 +133,232 @@ public class OrderService : IOrderService
         string?       pageToken    = null,
         int           pageSize     = 10)
     {
-        // ── Step 1: หา tenant จาก shopId ─────────────────────────
-        var tenant = _tenantStore.FindByShopId(shopId);
+        var tenant = await ResolveTenantAsync(shopId, "[ReturnSearch]");
+        if (tenant == null) return null;
 
+        var cfg = TikTokAppConfig.FromConfig(_config);
+        const string endpoint = "/return_refund/202602/returns/search";
+
+        var queryParams = TikTokRequestBuilder.CreateShopParams(cfg.AppKey, tenant.ShopCipher);
+        string body     = BuildReturnSearchBody(orderId, returnStatus, returnType, createFrom, createTo, pageToken, pageSize);
+        string url      = TikTokRequestBuilder.BuildSignedPostUrl(cfg.BaseUrl, endpoint, cfg.AppSecret, queryParams, body);
+
+        var apiClient = new TikTokApiClient(_httpClientFactory, _logger);
+        return await apiClient.PostJsonAsync(url, tenant.AccessToken, body, "[ReturnSearch]");
+    }
+
+    // ════════════════════════════════════════════════════════════
+    // ProcessCancellationWebhookAsync — ประมวลผล Cancellation Event
+    // ════════════════════════════════════════════════════════════
+    public async Task ProcessCancellationWebhookAsync(
+        string shopId,
+        string orderId,
+        string cancelStatus,
+        long   webhookTimestamp,
+        string rawWebhookJson)
+    {
+        _logger.LogWarning(
+            "[CancellationService] เริ่มประมวลผล | ShopId={ShopId} | OrderId={OrderId} | Status={Status}",
+            shopId, orderId, cancelStatus);
+
+        await FetchAndPrintOrderDetailAsync(shopId, orderId);
+
+        var cancellationRawJson = await SearchCancellationByOrderIdAsync(shopId, orderId);
+
+        if (string.IsNullOrWhiteSpace(cancellationRawJson))
+            _logger.LogWarning("[CancellationService] ไม่พบรายละเอียด | OrderId={OrderId}", orderId);
+        else
+            _logger.LogWarning("[CancellationService] Cancellation JSON: {Json}", cancellationRawJson);
+
+        if (cancelStatus is "CANCELLATION_REQUEST_SUCCESS" or "CANCELLATION_REQUEST_COMPLETE")
+        {
+            _logger.LogWarning(
+                "[CancellationService] Cancellation สำเร็จ | OrderId={OrderId} → เตรียม REVERSE แต้ม",
+                orderId);
+
+            // TODO: Parse JSON → เก็บ DB → ตรวจสอบแต้มเดิม → สร้าง PointTransaction REVERSE
+        }
+    }
+
+    // ════════════════════════════════════════════════════════════
+    // ProcessReturnWebhookAsync — ประมวลผล Return/Refund Event
+    // ════════════════════════════════════════════════════════════
+    public async Task ProcessReturnWebhookAsync(
+        string shopId,
+        string orderId,
+        string returnStatus,
+        long   webhookTimestamp,
+        string rawWebhookJson)
+    {
+        _logger.LogWarning(
+            "[ReturnService] เริ่มประมวลผล | ShopId={ShopId} | OrderId={OrderId} | Status={Status}",
+            shopId, orderId, returnStatus);
+
+        await FetchAndPrintOrderDetailAsync(shopId, orderId);
+
+        var returnRawJson = await SearchReturnByOrderIdAsync(shopId, orderId);
+
+        if (string.IsNullOrWhiteSpace(returnRawJson))
+            _logger.LogWarning("[ReturnService] ไม่พบรายละเอียด | OrderId={OrderId}", orderId);
+        else
+            _logger.LogWarning("[ReturnService] Return JSON: {Json}", returnRawJson);
+
+        if (TikTokHelper.IsPossibleFinalRefundStatus(returnStatus))
+            _logger.LogWarning("[ReturnService] Return สำเร็จ | OrderId={OrderId} → เตรียม REVERSE แต้ม", orderId);
+    }
+
+    // ════════════════════════════════════════════════════════════
+    // Private: Token Validation
+    // ════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// หา Tenant จาก ShopId, ตรวจสอบ Refresh Token, และ Auto-refresh AccessToken ถ้าใกล้หมด
+    /// Returns null ถ้าไม่พบ Tenant (พร้อม log แล้ว)
+    /// </summary>
+    private async Task<ShopTenant?> ResolveTenantAsync(string shopId, string logTag)
+    {
+        var tenant = _tenantStore.FindByShopId(shopId);
         if (tenant == null)
         {
-            _logger.LogError("[ReturnSearch] ShopId not found: {ShopId}", shopId);
+            _logger.LogError("{Tag} ShopId not found: {ShopId}", logTag, shopId);
             return null;
         }
 
         await EnsureValidAccessTokenAsync(tenant);
+        return tenant;
+    }
 
-        // ── Step 2: ดึง config ───────────────────────────────────
-        string appKey    = _config["TikTok:AppKey"]    ?? "";
-        string appSecret = _config["TikTok:AppSecret"] ?? "";
-        string baseUrl   = _config["TikTok:BaseUrl"]
-            ?? "https://open-api-sandbox.tiktokglobalshop.com";
-
-        // Search Returns 202602
-        string endpointPath = "/return_refund/202602/returns/search";
-
-        // ── Step 3: query params ─────────────────────────────────
-        var queryParams = new Dictionary<string, string>
+    /// <summary>
+    /// ตรวจสอบและ Refresh AccessToken ถ้าใกล้หมดอายุ (ล่วงหน้า 30 นาที)
+    /// Throws ถ้า RefreshToken หมดอายุแล้ว
+    /// </summary>
+    private async Task EnsureValidAccessTokenAsync(ShopTenant tenant)
+    {
+        if (tenant.IsRefreshTokenExpired)
         {
-            { "app_key",     appKey },
-            { "shop_cipher", tenant.ShopCipher },
-            { "timestamp",   DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString() }
+            tenant.Status = "REAUTHORIZE_REQUIRED";
+            throw new InvalidOperationException(
+                $"RefreshToken ของร้าน {tenant.TenantCode} หมดอายุแล้ว — ต้องให้ร้านเชื่อมต่อ TikTok ใหม่");
+        }
+
+        // Token ยังเหลือเกิน 30 นาที — ใช้ได้ปกติ
+        if (!tenant.ShouldRefreshAccessToken) return;
+
+        _logger.LogWarning(
+            "[Token] AccessToken ใกล้หมดอายุ | Tenant={TenantCode} | ExpireAt={ExpireAt:u} | RemainingMinutes={Min}",
+            tenant.TenantCode, tenant.AccessTokenExpireAt, tenant.AccessTokenRemainingMinutes);
+
+        await _authService.RefreshAccessTokenAsync(tenant.TenantCode);
+
+        _logger.LogInformation(
+            "[Token] Refresh สำเร็จ | Tenant={TenantCode} | NewExpireAt={ExpireAt:u}",
+            tenant.TenantCode, tenant.AccessTokenExpireAt);
+    }
+
+    // ════════════════════════════════════════════════════════════
+    // Private: Body Builders
+    // ════════════════════════════════════════════════════════════
+
+    /// <summary>สร้าง JSON body สำหรับ Search Orders (POST /order/202309/orders/search)</summary>
+    private Dictionary<string, object> BuildOrderSearchBody(SearchOrderListRequestModel request)
+    {
+        var tz   = GetInputTimeZone();
+        var body = new Dictionary<string, object>
+        {
+            { "sort_field", string.IsNullOrWhiteSpace(request.SortField) ? "create_time" : request.SortField },
+            { "sort_order", string.IsNullOrWhiteSpace(request.SortOrder) ? "DESC"        : request.SortOrder }
         };
 
-        // ── Step 4: body ตาม TikTok API spec ─────────────────────
-        // order_ids: required  (array of string)
-        // return_status: optional array — RETURN_OR_REFUND_REQUEST_PENDING ฯลฯ
-        // return_type: optional array  — REFUND | RETURN_AND_REFUND | REPLACEMENT
-        // create_time_ge / le: optional Unix timestamp (second)
-        // page_token: optional string สำหรับ pagination
-        // page_size: optional int (default 10, max 100)
-        var bodyDict = new Dictionary<string, object>
+        if (request.CreateTimeFrom.HasValue) body["create_time_ge"] = ToUnixSeconds(request.CreateTimeFrom.Value, tz);
+        if (request.CreateTimeTo.HasValue)   body["create_time_lt"] = ToUnixSeconds(request.CreateTimeTo.Value,   tz);
+        if (request.UpdateTimeFrom.HasValue) body["update_time_ge"] = ToUnixSeconds(request.UpdateTimeFrom.Value, tz);
+        if (request.UpdateTimeTo.HasValue)   body["update_time_lt"] = ToUnixSeconds(request.UpdateTimeTo.Value,   tz);
+
+        // TikTok API 202309 ต้องมี time range เสมอ — fallback ย้อนหลัง 1 ปี
+        bool hasTimeFilter =
+            request.CreateTimeFrom.HasValue || request.CreateTimeTo.HasValue ||
+            request.UpdateTimeFrom.HasValue || request.UpdateTimeTo.HasValue;
+
+        if (!hasTimeFilter)
+        {
+            var now  = DateTimeOffset.UtcNow;
+            var from = now.AddDays(-365);
+            body["create_time_ge"] = from.ToUnixTimeSeconds();
+            body["create_time_lt"] = now.ToUnixTimeSeconds();
+
+            _logger.LogInformation(
+                "[OrderList] No time filter → fallback create_time 1 year | from={From} to={To}",
+                from.ToString("yyyy-MM-dd HH:mm:ss"),
+                now.ToString("yyyy-MM-dd HH:mm:ss"));
+        }
+
+        if (!string.IsNullOrWhiteSpace(request.OrderStatus))  body["order_status"]   = request.OrderStatus;
+        if (!string.IsNullOrWhiteSpace(request.BuyerUserId))  body["buyer_user_id"]  = request.BuyerUserId;
+        if (!string.IsNullOrWhiteSpace(request.ShippingType)) body["shipping_type"]  = request.ShippingType;
+
+        return body;
+    }
+
+
+    /// <summary>สร้าง JSON body สำหรับ Search Returns</summary>
+    private static string BuildReturnSearchBody(
+        string        orderId,
+        List<string>? returnStatus,
+        List<string>? returnType,
+        DateTime?     createFrom,
+        DateTime?     createTo,
+        string?       pageToken,
+        int           pageSize)
+    {
+        var body = new Dictionary<string, object>
         {
             { "order_ids", new[] { orderId } },
             { "page_size", pageSize }
         };
 
-        if (returnStatus is { Count: > 0 })
-            bodyDict["return_status"] = returnStatus;
-
-        if (returnType is { Count: > 0 })
-            bodyDict["return_type"] = returnType;
+        if (returnStatus is { Count: > 0 }) body["return_status"] = returnStatus;
+        if (returnType   is { Count: > 0 }) body["return_type"]   = returnType;
 
         if (createFrom.HasValue)
-        {
-            long createTimeGe = new DateTimeOffset(createFrom.Value, TimeSpan.FromHours(7)).ToUnixTimeSeconds();
-            bodyDict["create_time_ge"] = createTimeGe;
-        }
+            body["create_time_ge"] = new DateTimeOffset(createFrom.Value, TimeSpan.FromHours(7)).ToUnixTimeSeconds();
 
         if (createTo.HasValue)
-        {
-            long createTimeLe = new DateTimeOffset(createTo.Value, TimeSpan.FromHours(7)).ToUnixTimeSeconds();
-            bodyDict["create_time_le"] = createTimeLe;
-        }
+            body["create_time_le"] = new DateTimeOffset(createTo.Value, TimeSpan.FromHours(7)).ToUnixTimeSeconds();
 
         if (!string.IsNullOrWhiteSpace(pageToken))
-            bodyDict["page_token"] = pageToken;
+            body["page_token"] = pageToken;
 
-        string requestBody = JsonSerializer.Serialize(bodyDict);
-
-        // ── Step 5: sign ต้องใช้ requestBody ด้วย เพราะเป็น POST ──
-        queryParams["sign"] = TikTokSignHelper.GenerateSign(
-            appSecret,
-            endpointPath,
-            queryParams,
-            requestBody);
-
-        string queryString = string.Join("&", queryParams
-            .Select(p => $"{p.Key}={Uri.EscapeDataString(p.Value)}"));
-
-        string requestUrl = $"{baseUrl}{endpointPath}?{queryString}";
-
-        // ── Step 6: ยิง request ─────────────────────────────────
-        using var request = new HttpRequestMessage(HttpMethod.Post, requestUrl);
-
-        request.Headers.Add("x-tts-access-token", tenant.AccessToken);
-        request.Headers.Add("Accept", "application/json");
-
-        request.Content = new StringContent(
-            requestBody,
-            Encoding.UTF8,
-            "application/json");
-
-        var client = _httpClientFactory.CreateClient();
-
-        var response = await client.SendAsync(request);
-        string rawJson = await response.Content.ReadAsStringAsync();
-
-        _logger.LogWarning("[ReturnSearch] HTTP {StatusCode}: {Body}", (int)response.StatusCode, rawJson);
-
-        return rawJson;
+        return JsonSerializer.Serialize(body);
     }
 
-    public async Task ProcessReturnWebhookAsync(
-    string shopId,
-    string orderId,
-    string returnStatus,
-    long webhookTimestamp,
-    string rawWebhookJson)
-    {
-        _logger.LogWarning(
-            "[ReturnService] เริ่มประมวลผล Return/Refund | ShopId={ShopId} | OrderId={OrderId} | ReturnStatus={ReturnStatus}",
-            shopId,
-            orderId,
-            returnStatus);
+    // ════════════════════════════════════════════════════════════
+    // Private: Timezone Helpers
+    // ════════════════════════════════════════════════════════════
 
-        // Step 1: ดึง Order Detail เพื่อดู order หลัก
-        await FetchAndPrintOrderDetailAsync(shopId, orderId);
-
-        // Step 2: ดึงรายละเอียด Return/Refund จาก TikTok
-        var returnRawJson = await SearchReturnByOrderIdAsync(shopId, orderId);
-
-        if (string.IsNullOrWhiteSpace(returnRawJson))
-        {
-            _logger.LogWarning(
-                "[ReturnService] ไม่พบรายละเอียด return/refund จาก TikTok | OrderId={OrderId}",
-                orderId);
-        }
-        else
-        {
-            _logger.LogWarning(
-                "[ReturnService] ได้รายละเอียด return/refund แล้ว | OrderId={OrderId}",
-                orderId);
-
-            _logger.LogWarning(
-                "[ReturnService] Return RawJson: {RawJson}",
-                returnRawJson);
-        }
-
-        // Step 3: รอบนี้ยังไม่หักแต้มจริง แค่ log ก่อน
-        // ขั้นถัดไปค่อย parse returnRawJson แล้วดู refund amount / return_status
-        if (TikTokHelper.IsPossibleFinalRefundStatus(returnStatus))
-        {
-            _logger.LogWarning(
-                "[ReturnService] Return/Refund อาจสำเร็จแล้ว OrderId={OrderId} ต่อไปต้องเตรียม REVERSE แต้ม",
-                orderId);
-        }
-    }
-
+    /// <summary>
+    /// โหลด TimeZoneInfo จาก Config "TikTok:InputTimeZone"
+    /// Fallback ตามลำดับ: Asia/Bangkok → SE Asia Standard Time → UTC
+    /// </summary>
     private TimeZoneInfo GetInputTimeZone()
     {
-        var timeZoneId = _config["TikTok:InputTimeZone"];
+        var tzId = _config["TikTok:InputTimeZone"];
+        if (string.IsNullOrWhiteSpace(tzId)) tzId = "Asia/Bangkok";
 
-        if (string.IsNullOrWhiteSpace(timeZoneId))
-        {
-            timeZoneId = "Asia/Bangkok";
-        }
+        try { return TimeZoneInfo.FindSystemTimeZoneById(tzId); }
+        catch { /* Linux/Mac IANA → Windows fallback */ }
 
-        try
-        {
-            return TimeZoneInfo.FindSystemTimeZoneById(timeZoneId);
-        }
-        catch
-        {
-            // กันกรณีรันบน Windows แล้วไม่รู้จัก Asia/Bangkok
-            try
-            {
-                return TimeZoneInfo.FindSystemTimeZoneById("SE Asia Standard Time");
-            }
-            catch
-            {
-                return TimeZoneInfo.Utc;
-            }
-        }
+        try { return TimeZoneInfo.FindSystemTimeZoneById("SE Asia Standard Time"); }
+        catch { return TimeZoneInfo.Utc; }
     }
 
+    /// <summary>แปลง DateTime (อาจเป็น Unspecified) → Unix Seconds โดยใช้ inputTimeZone</summary>
     private static long ToUnixSeconds(DateTime value, TimeZoneInfo inputTimeZone)
     {
-        if (value.Kind == DateTimeKind.Utc)
-        {
+        if (value.Kind == DateTimeKind.Utc || value.Kind == DateTimeKind.Local)
             return new DateTimeOffset(value).ToUnixTimeSeconds();
-        }
 
-        if (value.Kind == DateTimeKind.Local)
-        {
-            return new DateTimeOffset(value).ToUnixTimeSeconds();
-        }
-
-        // ถ้า frontend ส่ง "2026-06-29T00:00:00" แบบไม่มี timezone
-        // เราจะถือว่าเป็นเวลาตาม inputTimeZone เช่น Asia/Bangkok
-        var unspecified = DateTime.SpecifyKind(value, DateTimeKind.Unspecified);
-        var utcDateTime = TimeZoneInfo.ConvertTimeToUtc(unspecified, inputTimeZone);
-
-        return new DateTimeOffset(utcDateTime).ToUnixTimeSeconds();
+        // Unspecified → ถือว่าเป็นเวลาตาม inputTimeZone (เช่น Asia/Bangkok)
+        var utc = TimeZoneInfo.ConvertTimeToUtc(DateTime.SpecifyKind(value, DateTimeKind.Unspecified), inputTimeZone);
+        return new DateTimeOffset(utc).ToUnixTimeSeconds();
     }
 }

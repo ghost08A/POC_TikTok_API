@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging;
 using System.Text.Json;
 using TikTokShop.Domain.Interfaces;
 using TikTokShop.Domain.ResponseModels;
+using TikTokShop.Service.Config;
 using TikTokShop.Service.Helpers;
 using TikTokShop.Service.Stores;
 
@@ -29,6 +30,8 @@ public class ShopService : IShopService
     private readonly ILogger<ShopService>    _logger;
     private readonly TenantStore             _tenantStore;
 
+    private const string ShopsEndpoint = "/authorization/202309/shops";
+
     public ShopService(
         IHttpClientFactory   httpClientFactory,
         IConfiguration       config,
@@ -42,12 +45,11 @@ public class ShopService : IShopService
     }
 
     // ════════════════════════════════════════════════════════════
-    // GetAuthorizedShopsAsync — Token Health Check
+    // GetAuthorizedShopsAsync — Token Health Check (by TenantCode)
     // ════════════════════════════════════════════════════════════
     /// <inheritdoc />
     public async Task<TikTokAuthorizedShopsResponse> GetAuthorizedShopsAsync(string tenantCode)
     {
-        // ── Step 1: Resolve Tenant ────────────────────────────────
         if (!_tenantStore.TryGetByCode(tenantCode, out var tenant) || tenant == null)
         {
             _logger.LogWarning("[Shops] ไม่พบ Tenant: {TenantCode}", tenantCode);
@@ -57,26 +59,17 @@ public class ShopService : IShopService
         return await GetAuthorizedShopsByAccessTokenAsync(tenant.AccessToken);
     }
 
+    // ════════════════════════════════════════════════════════════
+    // GetAuthorizedShopsByAccessTokenAsync — Token Health Check (by Token)
+    // ════════════════════════════════════════════════════════════
     public async Task<TikTokAuthorizedShopsResponse> GetAuthorizedShopsByAccessTokenAsync(string accessToken)
     {
-        string appKey = _config["TikTok:AppKey"] ?? throw new InvalidOperationException("ไม่พบ TikTok:AppKey");
-        string appSecret = _config["TikTok:AppSecret"] ?? throw new InvalidOperationException("ไม่พบ TikTok:AppSecret");
-        string baseUrl = _config["TikTok:BaseUrl"] ?? "https://open-api-sandbox.tiktokglobalshop.com";
+        var cfg = TikTokAppConfig.FromConfig(_config);
 
-        string endpointPath = "/authorization/202309/shops";
-        var queryParams = new Dictionary<string, string>
-        {
-            { "app_key",   appKey },
-            { "timestamp", DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString() },
-        };
+        var queryParams = TikTokRequestBuilder.CreateBaseParams(cfg.AppKey);
+        string requestUrl = TikTokRequestBuilder.BuildSignedGetUrl(cfg.BaseUrl, ShopsEndpoint, cfg.AppSecret, queryParams);
 
-        queryParams["sign"] = TikTokSignHelper.GenerateSign(appSecret, endpointPath, queryParams);
-
-        string queryString = string.Join("&", queryParams.Select(p => $"{p.Key}={Uri.EscapeDataString(p.Value)}"));
-        string requestUrl = $"{baseUrl}{endpointPath}?{queryString}";
-
-
-        // ── Step 5: ยิง HTTP GET พร้อม Access Token ───────────────
+        // Named client "TikTokClient" มี BaseAddress + default headers ตั้งไว้แล้ว
         var client = _httpClientFactory.CreateClient("TikTokClient");
         client.DefaultRequestHeaders.Remove("x-tts-access-token");
         client.DefaultRequestHeaders.Add("x-tts-access-token", accessToken);
@@ -93,7 +86,6 @@ public class ShopService : IShopService
             throw;
         }
 
-        // ── Step 6: Deserialize → TikTokAuthorizedShopsResponse ───
         var result = JsonSerializer.Deserialize<TikTokAuthorizedShopsResponse>(rawJson);
 
         if (result == null)
@@ -102,8 +94,6 @@ public class ShopService : IShopService
             throw new HttpRequestException("ไม่สามารถ Parse JSON Response จาก TikTok ได้");
         }
 
-        int shopCount = result.Data?.Shops.Count ?? 0;
         return result;
     }
-
 }

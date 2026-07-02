@@ -1,0 +1,29 @@
+{
+  "TikTok": {
+    "AppKey": "YOUR_SANDBOX_APP_KEY",
+    "AppSecret": "YOUR_SANDBOX_APP_SECRET",
+    "BaseUrl": "https://open-api-sandbox.tiktokglobalshop.com",
+    "InputTimeZone": "Asia/Bangkok"
+  },
+
+  "TikTokTenants": {
+    "PoC_MobileShop_01": {
+      "ShopName": "SANDBOX_SHOP_NAME",
+      "ShopCipher": "ROW_xxxxx",
+      "ShopId": "749xxxxxxxxxx",
+      "AccessToken": "ROW_xxxxx",
+      "RefreshToken": "ROW_xxxxx",
+      "AccessTokenExpireAt": "2026-01-01T00:00:00Z",
+      "RefreshTokenExpireAt": "2026-12-31T00:00:00Z"
+    },
+    "PoC_MobileShop_02": {
+      "ShopName": "SANDBOX_SHOP_NAME_2",
+      "ShopCipher": "ROW_xxxxx",
+      "ShopId": "749xxxxxxxxxx",
+      "AccessToken": "ROW_xxxxx",
+      "RefreshToken": "ROW_xxxxx",
+      "AccessTokenExpireAt": "2026-01-01T00:00:00Z",
+      "RefreshTokenExpireAt": "2026-12-31T00:00:00Z"
+    }
+  }
+}

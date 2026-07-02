@@ -15,6 +15,6 @@ namespace TikTokShop.Domain.Interfaces;
 // ================================================================
 public interface IAuthService
 {
-    Task<TikTokTokenData> ExchangeCodeForTokenAsync(string authCode,string state = null);
+    Task<TikTokTokenData> ExchangeCodeForTokenAsync(string authCode, string? state = null);
     Task<TikTokTokenData> RefreshAccessTokenAsync(string tenantCode);
 }

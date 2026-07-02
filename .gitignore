@@ -63,6 +63,8 @@ coverage/
 appsettings.Development.json
 appsettings.Production.json
 appsettings.Staging.json
+appsettings.Sandbox.json
+appsettings.RealShop.json
 appsettings.*.local.json
 secrets.json
 .env

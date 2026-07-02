@@ -1,0 +1,20 @@
+{
+  "TikTok": {
+    "AppKey": "YOUR_PRODUCTION_APP_KEY",
+    "AppSecret": "YOUR_PRODUCTION_APP_SECRET",
+    "BaseUrl": "https://open-api.tiktokglobalshop.com",
+    "InputTimeZone": "Asia/Bangkok"
+  },
+
+  "TikTokTenants": {
+    "Real_Shop": {
+      "ShopName": "ชื่อร้านจริง",
+      "ShopCipher": "ROW_xxxxx",
+      "ShopId": "749xxxxxxxxxx",
+      "AccessToken": "ROW_xxxxx",
+      "RefreshToken": "ROW_xxxxx",
+      "AccessTokenExpireAt": "2026-01-01T00:00:00Z",
+      "RefreshTokenExpireAt": "2026-12-31T00:00:00Z"
+    }
+  }
+}

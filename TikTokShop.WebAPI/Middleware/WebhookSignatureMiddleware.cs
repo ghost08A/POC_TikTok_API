@@ -95,8 +95,8 @@ public class WebhookSignatureMiddleware
             appKey,
             appSecret,
             rawBody,
-            receivedSig
-        );
+            receivedSig,
+            _logger);
 
         if (!isValid)
         {
