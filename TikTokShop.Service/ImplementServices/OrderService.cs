@@ -68,7 +68,7 @@ public class OrderService : IOrderService
 
         var apiClient = new TikTokApiClient(_httpClientFactory, _logger);
         var rawJson = await apiClient.GetAsync(url, tenant.AccessToken, "[OrderDetail]");
-        LogTikTokOrderPayload("[OrderDetail]", "GET /order/202507/orders", rawJson);
+        //LogApiResponse("[OrderDetail]", "GET", endpoint, rawJson);
         return rawJson;
     }
 
@@ -96,13 +96,13 @@ public class OrderService : IOrderService
 
         string url = TikTokRequestBuilder.BuildSignedPostUrl(cfg.BaseUrl, endpoint, cfg.AppSecret, queryParams, requestBody);
 
-        _logger.LogInformation(
-            "[OrderList] ShopId={ShopId} | Url={Url} | Body={Body}",
-            shopId, url, requestBody);
+        //_logger.LogInformation(
+        //    "[OrderList] ShopId={ShopId} | Url={Url} | Body={Body}",
+        //    shopId, url, requestBody);
 
         var apiClient = new TikTokApiClient(_httpClientFactory, _logger);
         var rawJson = await apiClient.PostJsonAsync(url, tenant.AccessToken, requestBody, "[OrderList]");
-        LogTikTokOrderPayload("[OrderList]", "POST /order/202309/orders/search", rawJson);
+        //LogApiResponse("[OrderList]", "POST", endpoint, rawJson);
         return rawJson;
     }
 
@@ -123,7 +123,7 @@ public class OrderService : IOrderService
 
         var apiClient = new TikTokApiClient(_httpClientFactory, _logger);
         var rawJson = await apiClient.PostJsonAsync(url, tenant.AccessToken, body, "[CancellationSearch]");
-        LogTikTokOrderPayload("[CancellationSearch]", "POST /return_refund/202602/cancellations/search", rawJson);
+        //LogApiResponse("[CancellationSearch]", "POST", endpoint, rawJson);
         return rawJson;
     }
 
@@ -152,7 +152,7 @@ public class OrderService : IOrderService
 
         var apiClient = new TikTokApiClient(_httpClientFactory, _logger);
         var rawJson = await apiClient.PostJsonAsync(url, tenant.AccessToken, body, "[ReturnSearch]");
-        LogTikTokOrderPayload("[ReturnSearch]", "POST /return_refund/202602/returns/search", rawJson);
+       // LogApiResponse("[ReturnSearch]", "POST", endpoint, rawJson);
         return rawJson;
     }
 
@@ -166,26 +166,12 @@ public class OrderService : IOrderService
         long   webhookTimestamp,
         string rawWebhookJson)
     {
-        _logger.LogWarning(
-            "[CancellationService] เริ่มประมวลผล | ShopId={ShopId} | OrderId={OrderId} | Status={Status}",
-            shopId, orderId, cancelStatus);
-        LogTikTokWebhookPayload("[CancellationService]", shopId, orderId, cancelStatus, webhookTimestamp, rawWebhookJson);
-
-        await FetchAndPrintOrderDetailAsync(shopId, orderId);
+        //await FetchAndPrintOrderDetailAsync(shopId, orderId);
 
         var cancellationRawJson = await SearchCancellationByOrderIdAsync(shopId, orderId);
 
-        if (string.IsNullOrWhiteSpace(cancellationRawJson))
-            _logger.LogWarning("[CancellationService] ไม่พบรายละเอียด | OrderId={OrderId}", orderId);
-        else
-            _logger.LogWarning("[CancellationService] Cancellation JSON: {Json}", cancellationRawJson);
-
         if (cancelStatus is "CANCELLATION_REQUEST_SUCCESS" or "CANCELLATION_REQUEST_COMPLETE")
         {
-            _logger.LogWarning(
-                "[CancellationService] Cancellation สำเร็จ | OrderId={OrderId} → เตรียม REVERSE แต้ม",
-                orderId);
-
             // TODO: Parse JSON → เก็บ DB → ตรวจสอบแต้มเดิม → สร้าง PointTransaction REVERSE
         }
     }
@@ -200,22 +186,9 @@ public class OrderService : IOrderService
         long   webhookTimestamp,
         string rawWebhookJson)
     {
-        _logger.LogWarning(
-            "[ReturnService] เริ่มประมวลผล | ShopId={ShopId} | OrderId={OrderId} | Status={Status}",
-            shopId, orderId, returnStatus);
-        LogTikTokWebhookPayload("[ReturnService]", shopId, orderId, returnStatus, webhookTimestamp, rawWebhookJson);
-
-        await FetchAndPrintOrderDetailAsync(shopId, orderId);
+        //await FetchAndPrintOrderDetailAsync(shopId, orderId);
 
         var returnRawJson = await SearchReturnByOrderIdAsync(shopId, orderId);
-
-        if (string.IsNullOrWhiteSpace(returnRawJson))
-            _logger.LogWarning("[ReturnService] ไม่พบรายละเอียด | OrderId={OrderId}", orderId);
-        else
-            _logger.LogWarning("[ReturnService] Return JSON: {Json}", returnRawJson);
-
-        if (TikTokHelper.IsPossibleFinalRefundStatus(returnStatus))
-            _logger.LogWarning("[ReturnService] Return สำเร็จ | OrderId={OrderId} → เตรียม REVERSE แต้ม", orderId);
     }
 
     // ════════════════════════════════════════════════════════════
@@ -373,286 +346,30 @@ public class OrderService : IOrderService
         return new DateTimeOffset(utc).ToUnixTimeSeconds();
     }
 
-    private void LogTikTokWebhookPayload(
-        string logTag,
-        string shopId,
-        string orderId,
-        string status,
-        long webhookTimestamp,
-        string rawWebhookJson)
+    private void LogApiResponse(string logTag, string method, string endpoint, string? rawJson)
     {
+        string prettyJson = rawJson ?? "(empty)";
+        if (!string.IsNullOrWhiteSpace(rawJson))
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(rawJson);
+                prettyJson = JsonSerializer.Serialize(doc.RootElement, new JsonSerializerOptions { WriteIndented = true });
+            }
+            catch { }
+        }
+
         _logger.LogInformation(
             """
-            {Tag} TikTok Webhook Summary
-            --------------------------------------------------
-            ShopId    : {ShopId}
-            OrderId   : {OrderId}
-            UserId    : {UserId}
-            Status    : {Status}
-            Total     : {Total}
-            Timestamp : {Timestamp}
-            --------------------------------------------------
+            {Tag} ══════════════════════════════════════════════════
+            [API] {Method} {Endpoint}
+            ──────────────────────────────────────────────────
+            {Json}
+            ══════════════════════════════════════════════════
             """,
             logTag,
-            shopId,
-            orderId,
-            ExtractFirstValue(rawWebhookJson, "user_id", "buyer_user_id", "buyer_uid") ?? "-",
-            status,
-            ExtractFirstTotal(rawWebhookJson) ?? "-",
-            webhookTimestamp);
-
-        LogTikTokOrderPayload(logTag, "Webhook payload", rawWebhookJson);
+            method,
+            endpoint,
+            prettyJson);
     }
-
-    private void LogTikTokOrderPayload(string logTag, string source, string? rawJson)
-    {
-        if (string.IsNullOrWhiteSpace(rawJson))
-        {
-            _logger.LogWarning("{Tag} TikTok returned empty payload | Source={Source}", logTag, source);
-            return;
-        }
-
-        try
-        {
-            using var document = JsonDocument.Parse(rawJson);
-            var root = document.RootElement;
-            var summaries = new List<OrderLogSummary>();
-            CollectOrderSummaries(root, summaries);
-
-            _logger.LogInformation(
-                """
-                {Tag} TikTok Response Summary
-                --------------------------------------------------
-                Source    : {Source}
-                Code      : {Code}
-                Message   : {Message}
-                RequestId : {RequestId}
-                Orders    : {OrderCount}
-                --------------------------------------------------
-                """,
-                logTag,
-                source,
-                GetString(root, "code") ?? "-",
-                GetString(root, "message") ?? "-",
-                GetString(root, "request_id") ?? "-",
-                summaries.Count);
-
-            if (summaries.Count == 0)
-            {
-                _logger.LogInformation("{Tag} No order summary fields found in TikTok payload.", logTag);
-            }
-            else
-            {
-                for (var i = 0; i < summaries.Count; i++)
-                {
-                    var summary = summaries[i];
-                    _logger.LogInformation(
-                        """
-                        {Tag} Important Order #{Index}
-                          OrderId : {OrderId}
-                          UserId  : {UserId}
-                          Status  : {Status}
-                          Total   : {Total}
-                        """,
-                        logTag,
-                        i + 1,
-                        summary.OrderId ?? "-",
-                        summary.UserId ?? "-",
-                        summary.Status ?? "-",
-                        summary.Total ?? "-");
-                }
-            }
-
-            _logger.LogInformation(
-                "{Tag} Pretty TikTok JSON ({Source}):{NewLine}{Json}",
-                logTag,
-                source,
-                Environment.NewLine,
-                JsonSerializer.Serialize(root, new JsonSerializerOptions { WriteIndented = true }));
-        }
-        catch (JsonException ex)
-        {
-            _logger.LogWarning(ex, "{Tag} Cannot parse TikTok payload for pretty logging | Source={Source}", logTag, source);
-            _logger.LogInformation("{Tag} Raw TikTok payload ({Source}): {Json}", logTag, source, rawJson);
-        }
-    }
-
-    private static void CollectOrderSummaries(JsonElement element, List<OrderLogSummary> summaries)
-    {
-        switch (element.ValueKind)
-        {
-            case JsonValueKind.Object:
-                AddOrderSummaryIfPresent(element, summaries);
-
-                foreach (var property in element.EnumerateObject())
-                    CollectOrderSummaries(property.Value, summaries);
-                break;
-
-            case JsonValueKind.Array:
-                foreach (var item in element.EnumerateArray())
-                    CollectOrderSummaries(item, summaries);
-                break;
-        }
-    }
-
-    private static void AddOrderSummaryIfPresent(JsonElement element, List<OrderLogSummary> summaries)
-    {
-        var orderId = GetString(element, "order_id")
-                      ?? GetString(element, "orderId")
-                      ?? GetString(element, "id");
-
-        var status = GetString(element, "status")
-                     ?? GetString(element, "order_status")
-                     ?? GetString(element, "cancel_status")
-                     ?? GetString(element, "return_status");
-
-        var total = ExtractTotal(element);
-
-        if (orderId == null && status == null) return;
-
-        summaries.Add(new OrderLogSummary(
-            orderId,
-            GetString(element, "user_id")
-                ?? GetString(element, "buyer_user_id")
-                ?? GetString(element, "buyer_uid")
-                ?? GetString(element, "buyer_id"),
-            status,
-            total));
-    }
-
-    private static string? ExtractFirstValue(string rawJson, params string[] names)
-    {
-        try
-        {
-            using var document = JsonDocument.Parse(rawJson);
-            return FindFirstString(document.RootElement, names);
-        }
-        catch (JsonException)
-        {
-            return null;
-        }
-    }
-
-    private static string? ExtractFirstTotal(string rawJson)
-    {
-        try
-        {
-            using var document = JsonDocument.Parse(rawJson);
-            return FindFirstTotal(document.RootElement);
-        }
-        catch (JsonException)
-        {
-            return null;
-        }
-    }
-
-    private static string? FindFirstTotal(JsonElement element)
-    {
-        if (element.ValueKind == JsonValueKind.Object)
-        {
-            var total = ExtractTotal(element);
-            if (total != null) return total;
-
-            foreach (var property in element.EnumerateObject())
-            {
-                total = FindFirstTotal(property.Value);
-                if (total != null) return total;
-            }
-        }
-
-        if (element.ValueKind == JsonValueKind.Array)
-        {
-            foreach (var item in element.EnumerateArray())
-            {
-                var total = FindFirstTotal(item);
-                if (total != null) return total;
-            }
-        }
-
-        return null;
-    }
-
-    private static string? ExtractTotal(JsonElement element)
-    {
-        return GetMoney(element, "payment")
-               ?? GetMoney(element, "payment_info")
-               ?? GetMoney(element, "refund_amount")
-               ?? GetMoney(element, "total_amount")
-               ?? GetString(element, "total_amount")
-               ?? GetString(element, "total")
-               ?? GetString(element, "buyer_paid_total");
-    }
-
-    private static string? GetMoney(JsonElement element, string propertyName)
-    {
-        if (!element.TryGetProperty(propertyName, out var value)) return null;
-
-        if (value.ValueKind == JsonValueKind.Object)
-        {
-            var amount = GetString(value, "total_amount")
-                         ?? GetString(value, "amount")
-                         ?? GetString(value, "value");
-            var currency = GetString(value, "currency");
-
-            if (amount == null) return null;
-            return currency == null ? amount : $"{amount} {currency}";
-        }
-
-        return JsonElementToString(value);
-    }
-
-    private static string? FindFirstString(JsonElement element, params string[] names)
-    {
-        if (element.ValueKind == JsonValueKind.Object)
-        {
-            foreach (var name in names)
-            {
-                var value = GetString(element, name);
-                if (value != null) return value;
-            }
-
-            foreach (var property in element.EnumerateObject())
-            {
-                var value = FindFirstString(property.Value, names);
-                if (value != null) return value;
-            }
-        }
-
-        if (element.ValueKind == JsonValueKind.Array)
-        {
-            foreach (var item in element.EnumerateArray())
-            {
-                var value = FindFirstString(item, names);
-                if (value != null) return value;
-            }
-        }
-
-        return null;
-    }
-
-    private static string? GetString(JsonElement element, string propertyName)
-    {
-        if (!element.TryGetProperty(propertyName, out var value)) return null;
-        return JsonElementToString(value);
-    }
-
-    private static string? JsonElementToString(JsonElement value)
-    {
-        return value.ValueKind switch
-        {
-            JsonValueKind.String => value.GetString(),
-            JsonValueKind.Number => value.TryGetInt64(out var longValue)
-                ? longValue.ToString(CultureInfo.InvariantCulture)
-                : value.GetDouble().ToString(CultureInfo.InvariantCulture),
-            JsonValueKind.True => bool.TrueString,
-            JsonValueKind.False => bool.FalseString,
-            _ => null
-        };
-    }
-
-    private sealed record OrderLogSummary(
-        string? OrderId,
-        string? UserId,
-        string? Status,
-        string? Total);
 }

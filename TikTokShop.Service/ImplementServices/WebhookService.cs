@@ -53,9 +53,6 @@ public class WebhookService : IWebhookService
 
         LogIncomingWebhookPayload(payload, rawBody);
 
-        _logger.LogInformation("[Webhook] Event Type={Type} | ShopId={ShopId} | Timestamp={Ts}",
-            payload.Type, payload.ShopId, payload.Timestamp);
-
         // ── Step 2: Route ตาม Event Type ─────────────────────────
         switch (payload.Type)
         {
@@ -96,19 +93,14 @@ public class WebhookService : IWebhookService
             TypeName  : {TypeName}
             ShopId    : {ShopId}
             Timestamp : {Timestamp}
-            Size      : {Size} bytes
+            --------------------------------------------------
+            Payload   : {Payload}
             --------------------------------------------------
             """,
             type?.ToString() ?? "-",
             typeName,
             payload?.ShopId ?? "-",
             payload?.Timestamp.ToString() ?? "-",
-            rawBody.Length);
-
-        _logger.LogInformation(
-            "[Webhook] Payload from {TypeName}:{NewLine}{Payload}",
-            typeName,
-            Environment.NewLine,
             TryFormatJson(rawBody));
     }
 
@@ -155,9 +147,6 @@ public class WebhookService : IWebhookService
         string orderId = orderInfo.OrderId;
         string shopId  = payload.ShopId;
 
-        _logger.LogInformation("[Webhook] 📦 Order Status Changed | OrderId={OrderId} | Status={Status}",
-            orderId, orderInfo.OrderStatus);
-
         _ = Task.Run(async () =>
         {
             try
@@ -181,17 +170,13 @@ public class WebhookService : IWebhookService
             _logger.LogWarning("[Webhook:Cancel] Data เป็น null");
             return;
         }
-
-        _logger.LogWarning(
-            "[Webhook:Cancel] ShopId={ShopId}, OrderId={OrderId}, CancelStatus={CancelStatus}",
-            payload.ShopId,
-            data.OrderId,
-            data.CancelStatus);
-
         _ = Task.Run(async () =>
         {
             try
             {
+                // หน่วงเวลา 5 วินาที เพื่อรอให้ข้อมูลฝั่ง TikTok (Search API) อัปเดตเข้าระบบเสร็จสมบูรณ์
+                await Task.Delay(5000);
+
                 await _orderService.ProcessCancellationWebhookAsync(
                     payload.ShopId,
                     data.OrderId,
@@ -219,17 +204,15 @@ public class WebhookService : IWebhookService
             return;
         }
 
-        _logger.LogWarning(
-            "[Webhook:Return] ShopId={ShopId}, OrderId={OrderId}, ReturnId={ReturnId}, ReturnStatus={ReturnStatus}",
-            payload.ShopId,
-            data.OrderId,
-            data.ReturnId,
-            data.ReturnStatus);
+
 
         _ = Task.Run(async () =>
         {
             try
             {
+                // หน่วงเวลา 5 วินาที เพื่อรอให้ข้อมูลฝั่ง TikTok (Search API) อัปเดตเข้าระบบเสร็จสมบูรณ์
+                await Task.Delay(5000);
+
                 await _orderService.ProcessReturnWebhookAsync(
                     payload.ShopId,
                     data.OrderId,
@@ -263,20 +246,15 @@ public class WebhookService : IWebhookService
             return;
         }
 
-        _logger.LogWarning(
-            "[Webhook:Reverse] ShopId={ShopId}, OrderId={OrderId}, ReverseOrderId={ReverseOrderId}, ReverseEventType={ReverseEventType}, ReverseType={ReverseType}, ReverseStatus={ReverseStatus}, ReverseUser={ReverseUser}",
-            payload.ShopId,
-            data.OrderId,
-            data.ReverseOrderId,
-            data.ReverseEventType,
-            data.ReverseType,
-            data.ReverseOrderStatus,
-            data.ReverseUser);
+
 
         _ = Task.Run(async () =>
         {
             try
             {
+                // หน่วงเวลา 5 วินาที เพื่อรอให้ข้อมูลฝั่ง TikTok (Search API) อัปเดตเข้าระบบเสร็จสมบูรณ์
+                await Task.Delay(5000);
+
                 // 1. ดู order หลักก่อน เช่น COMPLETED / CANCELLED
                 await _orderService.FetchAndPrintOrderDetailAsync(
                     payload.ShopId,

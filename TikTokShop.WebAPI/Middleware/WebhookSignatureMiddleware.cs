@@ -66,7 +66,6 @@ public class WebhookSignatureMiddleware
 
         if (string.IsNullOrWhiteSpace(receivedSig))
         {
-            _logger.LogWarning("[Webhook] ❌ ไม่มี Header ลายเซ็น");
             context.Response.StatusCode = StatusCodes.Status401Unauthorized;
             context.Response.ContentType = "application/json";
             await context.Response.WriteAsync("{\"code\":401,\"message\":\"Missing signature header\"}");
@@ -75,7 +74,6 @@ public class WebhookSignatureMiddleware
 
         if (receivedSig == "POC_PASS")
         {
-            _logger.LogWarning("[Webhook] ⚠️ BYPASS MODE");
             await _next(context);
             return;
         }
@@ -92,15 +90,12 @@ public class WebhookSignatureMiddleware
 
         if (!isValid)
         {
-            _logger.LogWarning("[Webhook] ❌ Signature ไม่ถูกต้อง! Received: {Sig}", receivedSig);
-
             context.Response.StatusCode = StatusCodes.Status401Unauthorized;
             context.Response.ContentType = "application/json";
             await context.Response.WriteAsync("{\"code\":401,\"message\":\"Invalid webhook signature\"}");
             return;
         }
 
-        _logger.LogInformation("[Webhook] ✅ Signature ผ่านการตรวจสอบ");
         await _next(context);
     }
 }

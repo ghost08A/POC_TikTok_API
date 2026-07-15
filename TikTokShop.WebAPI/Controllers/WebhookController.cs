@@ -57,8 +57,6 @@ public class WebhookController : ControllerBase
         using var reader  = new StreamReader(HttpContext.Request.Body, Encoding.UTF8, leaveOpen: true);
         string    rawBody = await reader.ReadToEndAsync();
 
-        _logger.LogInformation("📡 [Webhook] ได้รับ Event ({Length} bytes)", rawBody.Length);
-
         // ส่งให้ WebhookService จัดการ (Fire-and-Forget อยู่ภายใน Service)
         await _webhookService.ProcessWebhookAsync(rawBody);
 
